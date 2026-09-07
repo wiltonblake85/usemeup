@@ -65,10 +65,15 @@ drawn as its real calendar days with a marker showing where the clock actually i
 The gap between the marker and the fill is a pace read: marker well ahead means the
 week's capacity will expire unused.
 
-**Burn-rate projection.** Where each window is heading at your current rate, and
-when it will hit 100% if it will. It says which basis it used: `recent` when there
-is enough sampled history to measure a slope, `average` when there is only one
-reading. It is a straight-line extrapolation and is labelled as one.
+**Burn-rate projection, as a chart.** Each window gets a burn-up chart: a solid
+line for what you have actually consumed, a dashed line for where the current rate
+lands you by reset, and a grey diagonal for even pace. Sitting below the diagonal
+means the window will expire with capacity unused; crossing it means you are
+outrunning the clock, and the point where the projection meets 100% is marked.
+
+The projection says which basis it used: `recent` when enough sampled history
+exists to measure a slope, `average` when there is only one reading. It is a
+straight-line extrapolation and is labelled as one.
 
 **Most expensive sessions.** Ranked by cost, with subagent calls folded into the
 session that spawned them. This is usually the fastest way to find where the money

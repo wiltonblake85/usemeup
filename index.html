@@ -229,38 +229,115 @@ function paceLine(w) {
   if (!w.window_seconds || w.resets_in_seconds == null) return "";
   const elapsedDays = (w.window_seconds - w.resets_in_seconds) / 86400;
   const totalDays = w.window_seconds / 86400;
-  const elapsedPct = elapsedDays / totalDays * 100;
+  const elapsedPct = (w.window_seconds - w.resets_in_seconds) / w.window_seconds * 100;
   const gap = w.used_pct - elapsedPct;
   const verdict = gap > 15 ? "ahead of pace, on track to run out early"
     : gap > 5 ? "slightly ahead of pace"
-    : gap < -15 ? "well under pace, most of this week will expire unused"
+    : gap < -15 ? "well under pace, most of this window will expire unused"
     : gap < -5 ? "a little under pace"
     : "on pace";
   const tone = gap > 15 ? "--critical" : gap > 5 ? "--warning" : "--text-muted";
+  const p = w.projection;
+  const proj = (p && !p.error)
+    ? ` · burning ${p.rate_pct_per_hour}%/hr, ` + (p.exhausted_at
+        ? `<strong style="color:var(--critical)">projected to hit 100% around ${
+            esc(new Date(p.exhausted_at).toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit"}))}</strong>`
+        : `landing near ${p.projected_end_pct}% at reset`)
+    : "";
+  const daysPart = totalDays >= 2
+    ? `day ${Math.floor(elapsedDays) + 1} of ${Math.round(totalDays)} · ` : "";
   return `<div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">
-    day ${Math.floor(elapsedDays) + 1} of ${Math.round(totalDays)} ·
-    ${elapsedPct.toFixed(0)}% of the window elapsed · ${w.used_pct}% of the allowance used ·
-    <span style="color:var(${tone})">${verdict}</span>
-    <br>each cell is one 24h day of the window, which rolls over at
-    ${esc(new Date(Date.now() + w.resets_in_seconds * 1000)
-      .toLocaleString(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" }))}, not midnight</div>`;
+    ${daysPart}${elapsedPct.toFixed(0)}% of the window elapsed · ${w.used_pct}% used ·
+    <span style="color:var(${tone})">${verdict}</span>${proj}</div>`;
+}
+
+// A burn-up chart: consumption against the clock, over one window.
+//   solid   what you have actually used, from samples
+//   dashed  where the current rate lands you by reset
+//   grey    the even-pace diagonal, 0% at open to 100% at reset
+// Above the diagonal means you are outrunning the window.
+function burnChart(w) {
+  const p = w.projection;
+  if (!p || p.error || !p.series || p.series.length < 2) return "";
+  const W = 1000, H = 150, PL = 40, PR = 96, PT = 12, PB = 24;
+  const iw = W - PL - PR, ih = H - PT - PB;
+
+  const t0 = new Date(p.window_start).getTime();
+  const t1 = new Date(p.resets_at).getTime();
+  const span = Math.max(1, t1 - t0);
+  const x = t => PL + iw * Math.max(0, Math.min(1, (t - t0) / span));
+  // Headroom above 100 so an over-cap projection is visible rather than clipped.
+  const yMax = Math.max(100, Math.ceil((p.projected_end_pct + 8) / 25) * 25);
+  const y = v => PT + ih - ih * Math.max(0, Math.min(yMax, v)) / yMax;
+
+  const ink = cssv("--text-primary"), muted = cssv("--text-muted"), line = cssv("--line");
+  const st = sevOf(w.used_pct);
+  const fill = cssv("--" + st);
+  const danger = cssv("--critical");
+
+  let g = "";
+  for (const v of [0, 25, 50, 75, 100]) {
+    if (v > yMax) continue;
+    const yy = y(v);
+    g += `<line x1="${PL}" y1="${yy}" x2="${W - PR}" y2="${yy}" stroke="${line}" stroke-width="1"/>
+          <text x="${PL - 7}" y="${yy + 3.5}" text-anchor="end" font-size="10" fill="${muted}">${v}%</text>`;
+  }
+  // The cap, drawn heavier than the other gridlines.
+  const yCap = y(100);
+  g += `<line x1="${PL}" y1="${yCap}" x2="${W - PR}" y2="${yCap}" stroke="${danger}"
+        stroke-width="1.5" stroke-dasharray="2 3" opacity=".75"/>`;
+
+  // Even-pace reference.
+  g += `<line x1="${x(t0)}" y1="${y(0)}" x2="${x(t1)}" y2="${y(100)}" stroke="${muted}"
+        stroke-width="1" stroke-dasharray="3 4" opacity=".45"/>
+        <text x="${W - PR + 8}" y="${y(100) + 3.5}" font-size="10" fill="${muted}">even pace</text>`;
+
+  // Observed.
+  const pts = p.series.map(s => [x(new Date(s.t).getTime()), y(s.pct)]);
+  const path = pts.map((q2, i) => `${i ? "L" : "M"}${q2[0].toFixed(1)},${q2[1].toFixed(1)}`).join(" ");
+  const area = `${path} L${pts[pts.length-1][0].toFixed(1)},${y(0)} L${pts[0][0].toFixed(1)},${y(0)} Z`;
+  g += `<path d="${area}" fill="${fill}" opacity=".13"/>
+        <path d="${path}" fill="none" stroke="${fill}" stroke-width="2"
+              stroke-linejoin="round" stroke-linecap="round"/>`;
+
+  // Projection from now to reset.
+  const nowT = new Date(p.now).getTime();
+  const overCap = p.projected_end_pct > 100;
+  g += `<path d="M${x(nowT).toFixed(1)},${y(p.used_pct).toFixed(1)} L${x(t1).toFixed(1)},${y(p.projected_end_pct).toFixed(1)}"
+        fill="none" stroke="${overCap ? danger : fill}" stroke-width="2" stroke-dasharray="5 4" opacity=".85"/>
+        <circle cx="${x(nowT).toFixed(1)}" cy="${y(p.used_pct).toFixed(1)}" r="3.5" fill="${fill}"/>
+        <circle cx="${x(t1).toFixed(1)}" cy="${y(p.projected_end_pct).toFixed(1)}" r="3"
+                fill="none" stroke="${overCap ? danger : fill}" stroke-width="1.5"/>
+        <text x="${W - PR + 8}" y="${y(p.projected_end_pct) + 3.5}" font-size="10.5"
+              fill="${overCap ? danger : ink}" font-weight="600">${p.projected_end_pct}%</text>`;
+
+  // Where the projection crosses the cap.
+  if (p.exhausted_at) {
+    const xe = x(new Date(p.exhausted_at).getTime());
+    g += `<line x1="${xe}" y1="${PT}" x2="${xe}" y2="${PT + ih}" stroke="${danger}" stroke-width="1.5"/>
+          <circle cx="${xe}" cy="${yCap}" r="3.5" fill="${danger}"/>`;
+  }
+
+  // Now marker.
+  g += `<line x1="${x(nowT)}" y1="${PT - 4}" x2="${x(nowT)}" y2="${PT + ih + 4}" stroke="${ink}"
+        stroke-width="1.5" opacity=".55"/>
+        <text x="${x(nowT)}" y="${H - 8}" text-anchor="middle" font-size="10" fill="${ink}">now</text>`;
+
+  const shortWindow = span < 36 * 3600 * 1000;   // a 5h window needs clock times
+  const fmt = iso => shortWindow
+    ? new Date(iso).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})
+    : new Date(iso).toLocaleDateString([], {weekday: "short", month: "numeric", day: "numeric"});
+  g += `<text x="${PL}" y="${H - 8}" font-size="10" fill="${muted}">${esc(fmt(p.window_start))}</text>
+        <text x="${W - PR}" y="${H - 8}" text-anchor="end" font-size="10" fill="${muted}">${esc(fmt(p.resets_at))}</text>`;
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="margin-top:10px" role="img"
+    aria-label="Burn-up chart for ${esc(w.name)}: ${w.used_pct}% used, projected to reach ${p.projected_end_pct}% by reset">${g}</svg>`;
 }
 
 function projectionLine(w) {
-  const p = w.projection;
-  if (!p || p.error) return "";
-  const end = p.projected_end_pct;
-  const tone = p.will_exhaust ? "--critical" : end > 85 ? "--serious" : "--text-muted";
-  const when = p.exhausted_at
-    ? `<strong style="color:var(--critical)">projected to hit 100% around ${
-        esc(new Date(p.exhausted_at).toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit"}))}</strong>`
-    : `projected to finish the window at <span style="color:var(${tone})">${end}%</span>`;
-  const basis = p.basis === "recent"
-    ? `based on your rate over the last ${p.samples_used} readings`
-    : "based on the average rate so far this window, the only basis available from a single reading";
-  return `<div style="font-size:11.5px;color:var(--text-muted);margin-top:5px">
-    burning ${p.rate_pct_per_hour}%/hr · ${when} · <span style="opacity:.8">${basis}</span>.
-    A straight-line extrapolation, not a prediction.</div>`;
+  // Weekly windows get this inside paceLine; only the plain meters need it here.
+  if (w.segments) return "";
+  return paceLine(w);
 }
 
 function renderMeters(d) {
@@ -320,7 +397,7 @@ function renderMeters(d) {
     const body = (w.segments
       ? dayTrack(w) + paceLine(w)
       : `<div class="track"><div class="fill" style="width:${Math.max(p, p > 0 ? 0.6 : 0)}%;background:var(--${st})"></div></div>`)
-      + projectionLine(w);
+      + projectionLine(w) + burnChart(w);
     return `<div class="meter" style="${d.stale ? "opacity:.72" : ""}">
       <div class="row">
         <span class="nm"><span class="dot" style="background:var(--${st})"></span>${esc(w.name)}

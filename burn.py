@@ -85,6 +85,19 @@ def project(window, samples, now=None):
         if hours_to_cap <= hours_left:
             exhausted_at = (now + datetime.timedelta(hours=hours_to_cap)).isoformat()
 
+    # Series for the chart. The window opened at 0% by definition, so anchoring
+    # there gives an honest line even before any samples have accumulated.
+    window_start = now - datetime.timedelta(seconds=elapsed_s)
+    series = [{"t": window_start.isoformat(), "pct": 0.0}]
+    for t, pct in usable:
+        series.append({"t": t.isoformat(), "pct": round(pct, 2)})
+    series.append({"t": now.isoformat(), "pct": round(float(used), 2)})
+    # Collapse duplicate timestamps, keeping the later reading.
+    dedup = {}
+    for pt in series:
+        dedup[pt["t"][:19]] = pt
+    series = sorted(dedup.values(), key=lambda x: x["t"])
+
     return {
         "basis": basis,
         "samples_used": len(usable),
@@ -92,7 +105,12 @@ def project(window, samples, now=None):
         "projected_end_pct": round(max(0.0, projected_end), 1),
         "will_exhaust": exhausted_at is not None,
         "exhausted_at": exhausted_at,
+        "window_start": window_start.isoformat(),
         "resets_at": reset_at.isoformat(),
+        "now": now.isoformat(),
+        "used_pct": round(float(used), 2),
+        "elapsed_fraction": round(elapsed_s / win_s, 4),
+        "series": series,
         "headroom_pct": round(max(0.0, 100.0 - projected_end), 1),
     }
 
