@@ -10,8 +10,9 @@ import datetime
 import json
 import os
 
-import config
-import store
+from . import config
+from . import pricing as pricing_mod
+from . import store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -20,16 +21,12 @@ METRICS = ("input", "output", "thinking", "cache_read", "cache_write",
 
 
 def _pricing():
-    try:
-        with open(os.path.join(HERE, "pricing.json")) as f:
-            return json.load(f).get("models", {})
-    except Exception:
-        return {}
+    """Live price table when available, cache or bundled table otherwise."""
+    return pricing_mod.load()[0]
 
 
 def _price_for(model, prices):
-    cands = [k for k in prices if (model or "").startswith(k)]
-    return prices[max(cands, key=len)] if cands else None
+    return pricing_mod.price_for(model, prices)
 
 
 def _cost(row, price):
@@ -184,6 +181,7 @@ def build(block_days=30, day_limit=120):
     return {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "timezone": str(config.LOCAL_TZ),
+        "pricing": pricing_mod.load()[1],
         "demo": config.DEMO,
         "totals": totals,
         "by_day": {d: v for d, v in by_day.items() if d in keep},

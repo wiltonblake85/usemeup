@@ -17,7 +17,7 @@ escape, read _safe() and the return statements in probe(). That is the whole sur
 """
 import json, os, subprocess, time, urllib.request, urllib.error, datetime
 
-import config
+from . import config
 
 API_HOST = "https://api.anthropic.com"
 KEYCHAIN_SERVICES = ["Claude Code-credentials", "Claude Code", "claude-code"]

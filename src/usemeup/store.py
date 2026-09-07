@@ -24,7 +24,7 @@ import os
 import sqlite3
 import time
 
-import config
+from . import config
 
 CLI_ROOT = config.CLI_ROOT
 COWORK_ROOT = config.COWORK_ROOT

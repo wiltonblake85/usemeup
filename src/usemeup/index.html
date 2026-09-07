@@ -683,6 +683,11 @@ async function load() {
       + "which is why long agentic sessions dominate these totals."
       + (un.length ? ` <strong>${un.length} model(s) have no price entry: ${esc(un.join(", "))}. Add them to pricing.json.</strong>` : "")
       + ` Days are cut in ${esc(u.timezone || "your local zone")}.`
+      + (u.pricing ? ` Prices: ${esc(u.pricing.source || "unknown")}`
+          + (u.pricing.age_hours != null ? `, ${u.pricing.age_hours}h old` : "")
+          + `, ${u.pricing.models || 0} models`
+          + (u.pricing.error ? ` <span style="color:var(--warning)">(${esc(u.pricing.error)})</span>` : "")
+          + "." : "")
       + ` <a href="/api/export" style="color:var(--s1)">Export everything as JSON</a>.`;
   } catch (e) {
     $("#sub").textContent = "could not read usage: " + e.message;

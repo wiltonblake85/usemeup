@@ -8,10 +8,28 @@ leaves your machine, and the only network call it ever makes is to
 `api.anthropic.com` to ask what your rate-limit windows look like.
 
 ```
-python3 server.py
+uvx --from git+https://github.com/wiltonblake85/usemeup usemeup
 ```
 
-Python 3.9+, standard library only. No pip install, no build step, no daemon.
+or, if you prefer it installed:
+
+```
+pipx install git+https://github.com/wiltonblake85/usemeup
+usemeup
+```
+
+Python 3.9+, **no dependencies at all** — standard library only, so the entire
+supply chain is this one repo.
+
+```
+usemeup            index transcripts and open the dashboard
+usemeup verify     recount from raw transcripts and check the index
+usemeup daily      a terminal table, no browser needed
+usemeup prices     show the resolved price table and where it came from
+usemeup ingest     re-scan without serving
+```
+
+From a clone: `PYTHONPATH=src python3 -m usemeup.cli`.
 
 ---
 
@@ -20,10 +38,10 @@ Python 3.9+, standard library only. No pip install, no build step, no daemon.
 Every tool in this category claims the numbers are right. This one ships the check.
 
 ```
-python3 verify.py
+usemeup verify
 ```
 
-`verify.py` re-reads your raw transcripts and recounts everything from scratch. It
+`usemeup verify` re-reads your raw transcripts and recounts everything from scratch. It
 shares no counting, deduplication or pricing code with the dashboard, so it cannot
 inherit the dashboard's mistakes. It compares every day and exits non-zero if
 anything disagrees.
@@ -113,12 +131,16 @@ only rather than reporting a silently partial total.
 | `config.py` | nothing | none | none |
 | `store.py` | your transcripts (read-only) → `~/.usemeup/usage.db` | none | none |
 | `parse_usage.py` | `~/.usemeup/usage.db` | none | none |
+| `pricing.py` | the cache, the bundled table | **raw.githubusercontent.com** (public file, GET) | none |
 | `burn.py` | recorded samples | none | none |
 | `verify.py` | your transcripts, the index | none | none |
 | `rate_limits.py` | macOS Keychain, or `~/.claude/.credentials.json` | api.anthropic.com only | **yes**, in memory |
 | `server.py` | the above | binds `127.0.0.1` only | none |
 
-`rate_limits.py` is the only file worth auditing closely. The token is never
+Two files reach the network and no others. `pricing.py` does a plain GET of a
+public price list; nothing about you is sent, no token, no identifiers, no query
+parameters, and `USEMEUP_OFFLINE=1` disables it. `rate_limits.py` is the one worth
+auditing closely. The token is never
 written to disk, logged, cached, or returned; everything the module returns passes
 through `_safe()` first. It is **read-only** on your credential: it never writes to
 the Keychain and never uses the refresh token, so it cannot rotate or invalidate
@@ -163,6 +185,7 @@ Without it, the panel tells you the token expired and that `claude -p ok` fixes 
 | `USEMEUP_TZ` | IANA zone for day bucketing (default: your system zone) |
 | `USEMEUP_DEMO=1` | redact project and session names |
 | `USEMEUP_AUTO_REFRESH=1` | allow the token refresh described above |
+| `USEMEUP_OFFLINE=1` | never fetch live prices; use the cache or bundled table |
 | `USEMEUP_DB` | override the index location |
 
 ---
@@ -178,9 +201,21 @@ Cache reads dominate token volume and price at a tenth of input, so long agentic
 sessions with large replayed context dominate the totals. A short, high-value
 conversation will always look small next to one long agentic run.
 
-When a new model appears, add it to `pricing.json`. Until you do it shows as
-`unpriced` rather than silently counting as zero. Prices from
-[the Claude pricing page](https://platform.claude.com/docs/en/about-claude/pricing).
+Prices resolve from the community-maintained
+[LiteLLM price database](https://github.com/BerriAI/litellm), cached locally for 24
+hours, falling back to the bundled `pricing.json` when the network is unavailable.
+`usemeup prices` shows the table and its provenance; the dashboard footer names the
+source and its age, so a stale table is visible rather than quietly wrong.
+
+Only rows whose `litellm_provider` is `anthropic` are used. The `us.anthropic.*`
+rows in that file are Amazon Bedrock regional prices carrying a 10% premium, and
+using them would overstate every figure by that much. The first-party rows were
+cross-checked against
+[Anthropic's published pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+for Opus 5, Opus 4.8, Opus 4.7, Fable 5.1, Sonnet 5 and Haiku 4.5, and matched
+exactly on all five price fields.
+
+`USEMEUP_OFFLINE=1` skips the fetch entirely.
 
 ---
 
@@ -189,10 +224,9 @@ When a new model appears, add it to `pricing.json`. Until you do it shows as
 About 100k call records across roughly 5 GB of transcripts. A `PRIMARY KEY` on
 `(requestId, message.id)` makes deduplication exact, and files whose mtime and size
 have not changed are skipped, so a refresh costs a `stat()` per file. First ingest is
-about 15 seconds; after that it is effectively free. `GET /api/ingest` forces a
-rescan, `GET /api/export` dumps everything as JSON.
+about 15 seconds; after that it is effectively free. `GET /api/export` dumps everything as JSON.
 
-`store.py` carries a `SCHEMA_VERSION`. Bumping it drops and rebuilds the index on the
+`usemeup ingest` forces a rescan. `store.py` carries a `SCHEMA_VERSION`. Bumping it drops and rebuilds the index on the
 next connect, which is how column or semantics changes take effect. Recorded
 rate-limit samples deliberately survive that rebuild, since they are timestamped
 observations that cannot be recovered by re-reading transcripts.

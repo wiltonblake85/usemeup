@@ -13,6 +13,7 @@ Environment variables:
   USEMEUP_AUTO_REFRESH=1 let the dashboard run `claude -p ok` to refresh an
                          expired token. OFF by default because it spends a
                          small number of your tokens. See README.
+  USEMEUP_OFFLINE=1      never fetch live prices; use the cache or bundled table
   USEMEUP_DB             override the database location
 """
 import datetime
@@ -58,6 +59,8 @@ REFRESH_CWD = os.path.join(DB_DIR, "refresh")
 PORT = int(os.environ.get("USEMEUP_PORT", "8787"))
 DEMO = os.environ.get("USEMEUP_DEMO", "") not in ("", "0", "false", "False")
 AUTO_REFRESH = os.environ.get("USEMEUP_AUTO_REFRESH", "") not in ("", "0", "false", "False")
+# Skip the public pricing fetch and use the cached or bundled table instead.
+OFFLINE = os.environ.get("USEMEUP_OFFLINE", "") not in ("", "0", "false", "False")
 
 
 def local_tz():
@@ -140,4 +143,6 @@ def banner():
     lines.append("auto-refresh: %s" % ("ON (will run `claude -p ok` when the token expires)"
                                        if AUTO_REFRESH else
                                        "off (set USEMEUP_AUTO_REFRESH=1 to enable)"))
+    if OFFLINE:
+        lines.append("offline mode: no price fetch; using the cached or bundled table.")
     return "\n".join(lines)

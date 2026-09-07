@@ -20,13 +20,12 @@ import time
 import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
 
-import burn
-import config
-import parse_usage
-import rate_limits
-import store
+from . import burn
+from . import config
+from . import parse_usage
+from . import rate_limits
+from . import store
 
 PORT = config.PORT
 _cache = {"usage": None, "usage_at": 0, "limits": None, "limits_at": 0, "ingest": None}

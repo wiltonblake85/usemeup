@@ -24,10 +24,20 @@ survived in this project:
 
 Both were found by a recount like this one, not by reading the code.
 
-The only thing imported from the project is config, and only for the transcript
-paths, timezone, and the exclusion rule, so that this script and the tool are
-looking at the same files. The counting, deduplication and pricing are
-independent.
+What this proves, and what it does not
+-------------------------------------
+It proves the COUNTING: which records exist, how duplicates collapse, which day
+each call lands on, and that the index agrees with the transcripts. That is where
+the bugs were.
+
+It does not independently prove the PRICE TABLE. Both sides deliberately read the
+same prices, because a recount that used different prices would report a mismatch
+on every day and tell you nothing about counting. Prices come from the LiteLLM
+feed, whose first-party Anthropic rows were cross-checked against Anthropic's
+published pricing page; run `usemeup prices` to see the table and its source.
+
+Shared with the tool: transcript paths, timezone, the exclusion rule, and the
+price table. Independent: reading, deduplication, bucketing and aggregation.
 
 Sharing the exclusion rule matters: this tool can make its own throwaway calls to
 refresh an expired token, and when the recount and the index disagreed about
@@ -40,19 +50,15 @@ import os
 import sqlite3
 import sys
 
-import config
-
-PRICING_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pricing.json")
-
+from . import config
+from . import pricing as pricing_mod
 
 def load_prices():
-    with open(PRICING_PATH) as f:
-        return json.load(f).get("models", {})
+    return pricing_mod.load()[0]
 
 
 def price_for(model, prices):
-    c = [k for k in prices if (model or "").startswith(k)]
-    return prices[max(c, key=len)] if c else None
+    return pricing_mod.price_for(model, prices)
 
 
 def recount():

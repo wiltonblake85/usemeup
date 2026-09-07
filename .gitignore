@@ -18,3 +18,11 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Cached price table, refetched on demand
+pricing-cache.json
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
