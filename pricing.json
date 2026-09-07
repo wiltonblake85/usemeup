@@ -1,0 +1,19 @@
+{
+  "_source": "https://platform.claude.com/docs/en/about-claude/pricing (fetched 2026-09-05)",
+  "_units": "USD per million tokens",
+  "_note": "Claude Code on a subscription is not billed per token. These figures are what the same usage would cost at published API rates. Treat it as a size signal, not an invoice.",
+  "_matching": "Longest matching model-id prefix wins, so dated ids like claude-opus-4-5-20251101 resolve to claude-opus-4-5.",
+  "models": {
+    "claude-opus-5":     {"input": 5,  "output": 25, "cache_write_5m": 6.25,  "cache_write_1h": 10, "cache_read": 0.50},
+    "claude-opus-4-8":   {"input": 5,  "output": 25, "cache_write_5m": 6.25,  "cache_write_1h": 10, "cache_read": 0.50},
+    "claude-opus-4-7":   {"input": 5,  "output": 25, "cache_write_5m": 6.25,  "cache_write_1h": 10, "cache_read": 0.50},
+    "claude-opus-4-6":   {"input": 5,  "output": 25, "cache_write_5m": 6.25,  "cache_write_1h": 10, "cache_read": 0.50},
+    "claude-opus-4-5":   {"input": 5,  "output": 25, "cache_write_5m": 6.25,  "cache_write_1h": 10, "cache_read": 0.50},
+    "claude-fable-5-1":  {"input": 10, "output": 50, "cache_write_5m": 12.50, "cache_write_1h": 20, "cache_read": 0.25},
+    "claude-fable-5":    {"input": 10, "output": 50, "cache_write_5m": 12.50, "cache_write_1h": 20, "cache_read": 1.00},
+    "claude-sonnet-5":   {"input": 2,  "output": 10, "cache_write_5m": 2.50,  "cache_write_1h": 4,  "cache_read": 0.20},
+    "claude-sonnet-4-6": {"input": 3,  "output": 15, "cache_write_5m": 3.75,  "cache_write_1h": 6,  "cache_read": 0.30},
+    "claude-sonnet-4-5": {"input": 3,  "output": 15, "cache_write_5m": 3.75,  "cache_write_1h": 6,  "cache_read": 0.30},
+    "claude-haiku-4-5":  {"input": 1,  "output": 5,  "cache_write_5m": 1.25,  "cache_write_1h": 2,  "cache_read": 0.10}
+  }
+}

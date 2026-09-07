@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UseMeUp</title>
+<style>
+:root{
+  color-scheme:light;
+  --surface-0:#f4f3f0; --surface-1:#fcfcfb; --line:#e3e1dc;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --text-muted:#7a7873;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --surface-0:#111110; --surface-1:#1a1a19; --line:#33322f;
+    --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8d8b83;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --surface-0:#111110; --surface-1:#1a1a19; --line:#33322f;
+  --text-primary:#fff; --text-secondary:#c3c2b7; --text-muted:#8d8b83;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface-0);color:var(--text-primary);
+  font:14px/1.5 ui-sans-serif,-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 64px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:6px;flex-wrap:wrap}
+h1{font-size:19px;margin:0;letter-spacing:-.01em;font-weight:600}
+.sub{color:var(--text-muted);font-size:12.5px;margin:0 0 22px}
+.card{background:var(--surface-1);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
+.card h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-secondary);
+  margin:0 0 16px;font-weight:600}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:16px}
+.tile{background:var(--surface-1);padding:16px 18px}
+.tile .k{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+.tile .v{font-size:25px;font-weight:600;letter-spacing:-.02em;margin-top:5px;
+  font-variant-numeric:tabular-nums}
+.tile .n{font-size:11.5px;color:var(--text-muted);margin-top:3px}
+.meter{margin-bottom:26px}
+.meter:last-child{margin-bottom:0}
+.meter .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px;gap:12px}
+.meter .nm{font-size:13px;font-weight:500;display:flex;align-items:center;gap:7px}
+.meter .rt{font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.track{height:9px;background:var(--surface-0);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.fill{height:100%;border-radius:4px 0 0 4px;transition:width .4s ease}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.note{background:var(--surface-0);border:1px solid var(--line);border-left:3px solid var(--warning);
+  border-radius:6px;padding:12px 14px;font-size:12.5px;color:var(--text-secondary);margin-top:4px}
+.note code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+  background:var(--surface-1);padding:1px 5px;border-radius:3px;border:1px solid var(--line)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:14px;font-size:12px;color:var(--text-secondary)}
+.legend span{display:flex;align-items:center;gap:6px}
+.sw{width:10px;height:10px;border-radius:2px;flex:none}
+svg{display:block;width:100%;overflow:visible}
+.gl{stroke:var(--line);stroke-width:1}
+.ax{fill:var(--text-muted);font-size:10.5px}
+.dl{fill:var(--text-secondary);font-size:11px;font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+th{text-align:left;font-weight:600;color:var(--text-secondary);font-size:11px;text-transform:uppercase;
+  letter-spacing:.05em;padding:7px 10px 7px 0;border-bottom:1px solid var(--line)}
+td{padding:7px 10px 7px 0;border-bottom:1px solid var(--line);color:var(--text-secondary)}
+td:first-child{color:var(--text-primary)}
+th.r,td.r{text-align:right;padding-right:0}
+.btn{background:var(--surface-1);border:1px solid var(--line);color:var(--text-secondary);
+  border-radius:6px;padding:5px 11px;font-size:12px;cursor:pointer;font-family:inherit}
+.btn:hover{color:var(--text-primary)}
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .1s;background:var(--surface-1);
+  border:1px solid var(--line);border-radius:7px;padding:9px 11px;font-size:12px;z-index:9;
+  box-shadow:0 6px 20px rgba(0,0,0,.16);max-width:260px}
+#tip .th{font-weight:600;margin-bottom:5px;color:var(--text-primary)}
+#tip .tr{display:flex;justify-content:space-between;gap:16px;color:var(--text-secondary);
+  font-variant-numeric:tabular-nums}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>UseMeUp</h1>
+    <button class="btn" id="theme">theme</button>
+  </header>
+  <div id="demo-banner"></div>
+  <p class="sub" id="sub">reading local session files…</p>
+
+  <div class="card">
+    <h2>Rate limit windows</h2>
+    <div id="meters"><p style="color:var(--text-muted);font-size:12.5px;margin:0">checking…</p></div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <header style="margin-bottom:14px">
+      <h2 style="margin:0">Notional spend by day</h2>
+      <span id="range-ctl"></span>
+    </header>
+    <div class="legend" id="legend-day"></div>
+    <div id="chart-day"></div>
+    <p id="day-note" style="font-size:11.5px;color:var(--text-muted);margin:14px 0 0"></p>
+  </div>
+
+  <div class="card">
+    <h2>Where the usage comes from</h2>
+    <div id="chart-source"></div>
+  </div>
+
+  <div class="card">
+    <h2>Notional spend by project</h2>
+    <div id="chart-proj"></div>
+  </div>
+
+  <div class="card">
+    <header style="margin-bottom:14px">
+      <h2 style="margin:0">Most expensive sessions</h2>
+      <span style="font-size:11.5px;color:var(--text-muted)">subagent calls folded into their parent</span>
+    </header>
+    <div id="chart-sessions"></div>
+  </div>
+
+  <div class="card">
+    <h2>Recent 5-hour blocks</h2>
+    <div id="chart-block"></div>
+  </div>
+
+  <div class="card">
+    <header style="margin-bottom:14px">
+      <h2 style="margin:0">By model</h2>
+      <button class="btn" id="toggle-table">show all days</button>
+    </header>
+    <table id="tbl-model"></table>
+    <table id="tbl-day" class="hidden" style="margin-top:18px"></table>
+  </div>
+
+  <p class="sub" id="foot"></p>
+</div>
+<div id="tip"></div>
+<script>
+const $ = s => document.querySelector(s);
+const SERIES = ["--s1","--s2","--s3","--s4","--s5"];
+const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const usd = n => n >= 100 ? "$" + n.toFixed(0) : n >= 1 ? "$" + n.toFixed(2) : "$" + n.toFixed(3);
+const num = n => n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
+              : n >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(n);
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const attrq = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+  .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const dur = s => { if (s == null) return "reset time unknown";
+  const h = Math.floor(s/3600), m = Math.floor(s%3600/60);
+  return h ? `resets in ${h}h ${m}m` : `resets in ${m}m`; };
+const shortModel = m => m.replace(/^claude-/, "").replace(/-(\d{8})$/, "");
+
+$("#theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme:dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  if (STATE.usage) renderCharts(STATE.usage);
+  if (STATE.limits) renderMeters(STATE.limits);
+};
+
+const tip = $("#tip");
+function showTip(e, title, rows) {
+  tip.innerHTML = `<div class="th">${esc(title)}</div>` +
+    rows.map(r => `<div class="tr"><span>${esc(r[0])}</span><span>${esc(r[1])}</span></div>`).join("");
+  tip.style.opacity = 1;
+  const w = tip.offsetWidth, x = Math.min(e.clientX + 14, innerWidth - w - 12);
+  tip.style.left = x + "px";
+  tip.style.top = Math.max(8, e.clientY - tip.offsetHeight - 12) + "px";
+}
+const hideTip = () => tip.style.opacity = 0;
+
+const STATE = {usage: null, limits: null};
+
+// ---------- rate limit meters ----------
+const sevOf = p => p >= 90 ? "critical" : p >= 75 ? "serious" : p >= 50 ? "warning" : "good";
+
+// A weekly window drawn as its seven real calendar days.
+// Fill = share of the allowance consumed. Marker = where the clock actually is.
+// The API reports one cumulative figure for the week, not a per-day split, so the
+// segments are calendar days, not daily consumption bars.
+function dayTrack(w) {
+  const N = w.segments || 7, G = 3, W = 1000, CH = 15;
+  const cw = (W - G * (N - 1)) / N, cx = i => i * (cw + G);
+  const used = Math.max(0, Math.min(1, w.used_pct / 100));
+  const haveClock = w.window_seconds && w.resets_in_seconds != null;
+  const elapsed = haveClock
+    ? Math.max(0, Math.min(1, (w.window_seconds - w.resets_in_seconds) / w.window_seconds)) : null;
+  const start = haveClock
+    ? new Date(Date.now() + w.resets_in_seconds * 1000 - w.window_seconds * 1000) : null;
+  const fill = cssv("--" + sevOf(w.used_pct));
+  const track = cssv("--surface-0"), line = cssv("--line");
+  const ink = cssv("--text-primary"), muted = cssv("--text-muted");
+  const nowCell = elapsed === null ? -1 : Math.min(N - 1, Math.floor(elapsed * N));
+
+  let cells = "", labels = "";
+  for (let i = 0; i < N; i++) {
+    const x = cx(i);
+    const local = Math.max(0, Math.min(1, (used - i / N) * N));
+    cells += `<rect x="${x}" y="0" width="${cw}" height="${CH}" rx="3" fill="${track}" stroke="${line}"/>`;
+    if (local > 0)
+      cells += `<rect x="${x}" y="0" width="${Math.max(2.5, local * cw)}" height="${CH}" rx="3" fill="${fill}"/>`;
+    if (start) {
+      const d = new Date(start.getTime() + i * 86400000 + 43200000);  // midpoint, not start
+      const lab = d.toLocaleDateString(undefined, { weekday: "short" }) + " " + d.getDate();
+      const on = i === nowCell;
+      labels += `<text x="${x + cw / 2}" y="${CH + 16}" text-anchor="middle" font-size="10.5"
+        fill="${on ? ink : muted}" font-weight="${on ? 600 : 400}">${esc(lab)}</text>`;
+    }
+  }
+  let marker = "";
+  if (elapsed !== null) {
+    const mx = cx(nowCell) + (elapsed * N - nowCell) * cw;
+    marker = `<line x1="${mx}" y1="-5" x2="${mx}" y2="${CH + 5}" stroke="${ink}" stroke-width="2"/>
+      <circle cx="${mx}" cy="-7" r="3.2" fill="${ink}"/>`;
+  }
+  return `<svg viewBox="0 -12 ${W} ${CH + 34}" role="img"
+    aria-label="${esc(w.name)}: ${w.used_pct}% used, ${Math.round((elapsed||0)*100)}% of the week elapsed">
+    ${cells}${marker}${labels}</svg>`;
+}
+
+function paceLine(w) {
+  if (!w.window_seconds || w.resets_in_seconds == null) return "";
+  const elapsedDays = (w.window_seconds - w.resets_in_seconds) / 86400;
+  const totalDays = w.window_seconds / 86400;
+  const elapsedPct = elapsedDays / totalDays * 100;
+  const gap = w.used_pct - elapsedPct;
+  const verdict = gap > 15 ? "ahead of pace, on track to run out early"
+    : gap > 5 ? "slightly ahead of pace"
+    : gap < -15 ? "well under pace, most of this week will expire unused"
+    : gap < -5 ? "a little under pace"
+    : "on pace";
+  const tone = gap > 15 ? "--critical" : gap > 5 ? "--warning" : "--text-muted";
+  return `<div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">
+    day ${Math.floor(elapsedDays) + 1} of ${Math.round(totalDays)} ·
+    ${elapsedPct.toFixed(0)}% of the window elapsed · ${w.used_pct}% of the allowance used ·
+    <span style="color:var(${tone})">${verdict}</span>
+    <br>each cell is one 24h day of the window, which rolls over at
+    ${esc(new Date(Date.now() + w.resets_in_seconds * 1000)
+      .toLocaleString(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" }))}, not midnight</div>`;
+}
+
+function projectionLine(w) {
+  const p = w.projection;
+  if (!p || p.error) return "";
+  const end = p.projected_end_pct;
+  const tone = p.will_exhaust ? "--critical" : end > 85 ? "--serious" : "--text-muted";
+  const when = p.exhausted_at
+    ? `<strong style="color:var(--critical)">projected to hit 100% around ${
+        esc(new Date(p.exhausted_at).toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit"}))}</strong>`
+    : `projected to finish the window at <span style="color:var(${tone})">${end}%</span>`;
+  const basis = p.basis === "recent"
+    ? `based on your rate over the last ${p.samples_used} readings`
+    : "based on the average rate so far this window, the only basis available from a single reading";
+  return `<div style="font-size:11.5px;color:var(--text-muted);margin-top:5px">
+    burning ${p.rate_pct_per_hour}%/hr · ${when} · <span style="opacity:.8">${basis}</span>.
+    A straight-line extrapolation, not a prediction.</div>`;
+}
+
+function renderMeters(d) {
+  const el = $("#meters");
+  const rawDump = () => Object.entries(d && d.raw || {})
+    .map(([k, v]) => `<code>${esc(k)}</code> ${esc(JSON.stringify(v))}`).join("<br>");
+
+  // Specific failures get specific instructions. "Unavailable" helps nobody.
+  const FIXES = {
+    token_expired: "Run a real Claude Code prompt in a terminal — <code>claude -p ok</code> is "
+      + "enough — then reload this page. Verified: only an actual API call refreshes the stored "
+      + "token. <code>claude auth status</code> reads local state and does NOT refresh it. "
+      + "This tool is read-only on your credential and deliberately will not refresh it for you.",
+    auth_failed: "Run a real Claude Code prompt (<code>claude -p ok</code>) to refresh the stored "
+      + "token, then reload. <code>claude auth status</code> will not do it.",
+    rate_limited: "The usage endpoint is throttling this client. It backs off automatically "
+      + "and will retry on its own; nothing for you to do.",
+    no_credential: "No Claude Code credential was found in the Keychain. Sign in to Claude Code "
+      + "once and it will be created.",
+  };
+
+  if (d && d.ok && !d.windows.length) {
+    el.innerHTML = `<div class="note"><strong>Reached the API, but no window reported a usable percentage.</strong>
+      The response shape may have changed. Raw response below, so you can adjust <code>_shape_json()</code>:
+      <br><br>${rawDump()}</div>`;
+    return;
+  }
+  if (!d || !d.ok || !d.windows.length) {
+    const why = (d && d.error) || "could not reach the rate limit API";
+    const fix = FIXES[d && d.reason];
+    const tried = (d && d.attempts || []).map(a =>
+      `<code>${esc(a.strategy)}</code> → HTTP ${esc(a.status)}, ${a.windows_found} windows`).join("<br>");
+    const tk = d && d.token || {};
+    el.innerHTML = `<div class="note"><strong>Live rate limits unavailable.</strong><br>${esc(why)}
+      ${fix ? "<br><br><strong>Fix:</strong> " + fix : ""}
+      ${tk.refresh_expires_at ? `<br><br>Refresh token still valid until
+        ${esc(new Date(tk.refresh_expires_at).toLocaleString())}, so a normal re-auth is all it takes.` : ""}
+      ${tried ? "<br><br>What it tried:<br>" + tried : ""}
+      <br><br>Everything below is read from local files and is unaffected.</div>`;
+    return;
+  }
+
+  const staleBanner = d.stale ? `<div class="note" style="border-left-color:var(--warning);margin-bottom:18px">
+      <strong>Showing the last good reading${d.stale_since
+        ? ", from " + esc(new Date(d.stale_since).toLocaleString()) : ""}.</strong>
+      ${esc(d.stale_reason || "The latest refresh failed.")}
+      ${FIXES[d.stale_kind] ? "<br><br><strong>Fix:</strong> " + FIXES[d.stale_kind] : ""}
+      <br><br>Percentages below are from that earlier check and are no longer live. Countdowns are current.</div>` : "";
+
+  el.innerHTML = staleBanner + d.windows.map(w => {
+    const p = w.used_pct, st = sevOf(p);
+    const icon = { good: "●", warning: "▲", serious: "▲", critical: "■" }[st];
+    const flags = [];
+    if (w.binding) flags.push("binding window");
+    if (w.status && !["allowed", "normal", "ok"].includes(w.status)) flags.push(esc(w.status));
+    if (d.stale) flags.push("stale");
+    const body = (w.segments
+      ? dayTrack(w) + paceLine(w)
+      : `<div class="track"><div class="fill" style="width:${Math.max(p, p > 0 ? 0.6 : 0)}%;background:var(--${st})"></div></div>`)
+      + projectionLine(w);
+    return `<div class="meter" style="${d.stale ? "opacity:.72" : ""}">
+      <div class="row">
+        <span class="nm"><span class="dot" style="background:var(--${st})"></span>${esc(w.name)}
+          <span style="color:var(--text-muted);font-weight:400">${icon} ${p}% used</span>
+          ${flags.length ? `<span style="color:var(--text-muted);font-weight:400;font-size:11.5px">· ${flags.join(" · ")}</span>` : ""}</span>
+        <span class="rt">${dur(w.resets_in_seconds)}</span>
+      </div>
+      ${body}
+    </div>`;
+  }).join("") + `<p style="font-size:11.5px;color:var(--text-muted);margin:18px 0 0">
+    live from api.anthropic.com · account-wide, so this covers Cowork and claude.ai too, not just this Mac
+    · the vertical marker is now · checked every 5 min while this page is open
+    · last checked ${esc((d.checked_at || "").slice(11, 16))} UTC</p>`;
+}
+
+// ---------- stat tiles ----------
+function renderTiles(u) {
+  const t = u.totals, days = Object.keys(u.by_day).sort();
+  const today = (() => { const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`;
+  })();  // local calendar day, matching the ET day keys from the server
+  const td = u.by_day[today];
+  const perDay = t.cost / Math.max(1, days.length);
+  const cacheRatio = t.cache_read / Math.max(1, t.cache_read + t.input + t.cache_write) * 100;
+  $("#tiles").innerHTML = [
+    ["Notional spend", usd(t.cost), `${days.length} active days tracked`],
+    ["Today", td ? usd(td.cost) : "$0", td ? `${td.calls} calls` : "no calls yet"],
+    ["Per active day", usd(perDay), "average"],
+    ["Cache hit share", cacheRatio.toFixed(1)+"%", `${num(t.cache_read)} tokens read`],
+    ["Output tokens", num(t.output), `${num(t.thinking)} thinking`],
+  ].map(([k,v,n]) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="n">${esc(n)}</div></div>`).join("");
+}
+
+// ---------- stacked bars: spend by day, by model ----------
+let RANGE = 30;  // days shown; "0" means everything on record
+
+function renderRangeCtl(u) {
+  const opts = [[7, "7d"], [30, "30d"], [90, "90d"], [0, "all"]];
+  $("#range-ctl").innerHTML = opts.map(([v, lab]) =>
+    `<button class="btn" data-range="${v}" style="margin-left:6px;${
+      v === RANGE ? "color:var(--text-primary);border-color:var(--text-muted)" : ""}">${lab}</button>`
+  ).join("");
+  $("#range-ctl").querySelectorAll("[data-range]").forEach(btn => {
+    btn.onclick = () => { RANGE = +btn.dataset.range; renderCharts(STATE.usage); };
+  });
+}
+
+function chartDay(u) {
+  renderRangeCtl(u);
+  const all = Object.keys(u.by_day).sort();
+  const days = RANGE ? all.slice(-RANGE) : all;
+
+  // Rank models by cost WITHIN the visible range. Ranking all-time hid Opus 5
+  // behind months of older models it has not yet outspent.
+  const inRange = {};
+  days.forEach(d => Object.entries(u.by_day_model[d] || {}).forEach(([m, v]) => {
+    inRange[m] = (inRange[m] || 0) + v.cost;
+  }));
+  const models = Object.keys(inRange).filter(m => inRange[m] > 0)
+    .sort((x, y) => inRange[y] - inRange[x]).slice(0, 5);
+  const color = m => cssv(SERIES[models.indexOf(m)] || "--s5");
+  $("#legend-day").innerHTML = models.map(m =>
+    `<span><i class="sw" style="background:${color(m)}"></i>${esc(shortModel(m))}</span>`).join("");
+
+  const W = 1000, H = 250, PL = 56, PR = 8, PT = 10, PB = 26;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const max = Math.max(...days.map(d => u.by_day[d].cost), 0.01);
+  const step = iw / days.length, bw = Math.min(38, step * 0.72);
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const y = PT + ih - ih * i / 4;
+    g += `<line class="gl" x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}"/>
+          <text class="ax" x="${PL-8}" y="${y+3.5}" text-anchor="end">${usd(max*i/4)}</text>`;
+  }
+  const every = Math.max(1, Math.ceil(days.length / 12));  // ~12 labels, never more
+  let bars = "";
+  days.forEach((d, i) => {
+    const x = PL + step * i + (step - bw) / 2;
+    let acc = 0;
+    const parts = models.map(m => {
+      const c = (u.by_day_model[d] && u.by_day_model[d][m]) ? u.by_day_model[d][m].cost : 0;
+      if (c <= 0) return "";
+      const hh = Math.max(1.5, ih * c / max), y = PT + ih - ih * acc / max - hh;
+      acc += c;
+      return `<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(0, hh-2)}" rx="3" fill="${color(m)}"/>`;
+    }).join("");
+    const rows = models.filter(m => u.by_day_model[d] && u.by_day_model[d][m])
+      .map(m => [shortModel(m), usd(u.by_day_model[d][m].cost)]);
+    const src = u.by_day_source[d] || {};
+    Object.keys(src).sort().forEach(s => rows.push([s, usd(src[s].cost)]));
+    rows.push(["total", usd(u.by_day[d].cost)], ["calls", String(u.by_day[d].calls)]);
+    bars += `<g>${parts}<rect x="${PL+step*i}" y="${PT}" width="${step}" height="${ih}" fill="transparent"
+      data-t="${esc(d)}" data-r="${attrq(JSON.stringify(rows))}"/></g>`;
+    if (i % every === 0 || i === days.length - 1)
+      bars += `<text class="ax" x="${x+bw/2}" y="${H-8}" text-anchor="middle">${d.slice(5)}</text>`;
+  });
+  $("#chart-day").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Notional spend by day">${g}${bars}</svg>`;
+  const hidden = Object.keys(inRange).filter(m => inRange[m] > 0 && !models.includes(m));
+  $("#day-note").innerHTML = `showing ${days.length} of ${all.length} days on record (Eastern time)`
+    + `, coloured by the top ${models.length} models in this range`
+    + (hidden.length ? `. Folded into the totals but not coloured: ${hidden.map(m => esc(shortModel(m))).join(", ")}` : "")
+    + ". Ranking follows the range, so a newer model shows up as soon as it leads.";
+  wireTips("#chart-day");
+}
+
+// ---------- where the usage comes from ----------
+const SOURCE_NAMES = { cowork: "Cowork (desktop app)", cli: "Claude Code CLI" };
+
+function chartSource(u) {
+  const rows = Object.entries(u.by_source).sort((a, b) => b[1].cost - a[1].cost);
+  if (!rows.length) { $("#chart-source").innerHTML = "<p class=\"sub\">nothing indexed</p>"; return; }
+  const total = rows.reduce((s, [, v]) => s + v.cost, 0) || 1;
+  const W = 1000, rh = 40, PL = 210, PR = 130;
+  const body = rows.map(([name, v], i) => {
+    const y = i * rh + 6, w = Math.max(2, (W - PL - PR) * v.cost / (rows[0][1].cost || 1));
+    return `<g><text class="dl" x="${PL-12}" y="${y+16}" text-anchor="end">${esc(SOURCE_NAMES[name] || name)}</text>
+      <rect x="${PL}" y="${y+4}" width="${w}" height="18" rx="4" fill="${cssv(i ? "--s2" : "--s1")}"/>
+      <text class="dl" x="${PL+w+10}" y="${y+17}">${usd(v.cost)} · ${(v.cost/total*100).toFixed(0)}%</text>
+      <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
+        data-t="${esc(SOURCE_NAMES[name] || name)}" data-r="${attrq(JSON.stringify([
+          ["notional", usd(v.cost)], ["calls", String(v.calls)],
+          ["output", num(v.output)], ["cache read", num(v.cache_read)]]))}"/></g>`;
+  }).join("");
+  $("#chart-source").innerHTML =
+    `<svg viewBox="0 0 ${W} ${rows.length*rh+10}" role="img" aria-label="Usage by source">${body}</svg>`
+    + `<p style="font-size:11.5px;color:var(--text-muted);margin:14px 0 0;line-height:1.55">
+       Cowork desktop sessions live under <code>~/Library/Application Support/Claude/local-agent-mode-sessions</code>,
+       each with its own nested transcript tree. Claude Code CLI sessions live under <code>~/.claude/projects</code>.
+       Cloud sessions run on Anthropic's servers and write nothing to this Mac, so they are counted in the
+       rate-limit meters at the top but cannot appear in these charts.</p>`;
+  wireTips("#chart-source");
+}
+
+// ---------- horizontal bars: spend by project ----------
+function chartProj(u) {
+  const host = $("#chart-proj");
+  const rows = Object.entries(u.by_project).filter(([, v]) => v.calls > 0)
+    .sort((x, y) => y[1].cost - x[1].cost || y[1].calls - x[1].calls).slice(0, 12);
+
+  // Coverage note: a project folder exists only where the CLI was actually run.
+  const dirs = u.project_dirs || [];
+  const empty = dirs.filter(d => d.files === 0);
+  const note = `<p style="font-size:11.5px;color:var(--text-muted);margin:16px 0 0;line-height:1.55">
+    Cowork desktop sessions are one bar: they are stored per session, not per project folder,
+    so there is no project to split them by. The named folders below it are Claude Code CLI,
+    which creates a folder only for a directory you actually ran <code>claude</code> in
+    (${rows.length - 1} of ${dirs.length} such folders have usage${empty.length ? "; empty: " +
+      empty.map(d => `<code>${esc(d.name)}</code>`).join(", ") : ""}).
+    Cloud sessions write nothing to this Mac and appear nowhere in this chart.</p>`;
+
+  if (!rows.length) { host.innerHTML = `<p class="sub">no project usage recorded yet</p>` + note; return; }
+
+  const max = rows[0][1].cost || 1, W = 1000, rh = 34, H = rows.length * rh + 8, PL = 250, PR = 100;
+  const body = rows.map(([name, v], i) => {
+    const y = i * rh + 6, w = Math.max(2, (W - PL - PR) * v.cost / max);
+    const label = name.length > 36 ? "…" + name.slice(-35) : name;
+    return `<g><text class="dl" x="${PL-12}" y="${y+15}" text-anchor="end">${esc(label)}</text>
+      <rect x="${PL}" y="${y+3}" width="${w}" height="18" rx="4" fill="${cssv("--s1")}"/>
+      <text class="dl" x="${PL+w+10}" y="${y+16}">${v.cost > 0 ? usd(v.cost) : v.calls + " calls"}</text>
+      <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
+        data-t="${esc(name)}" data-r="${attrq(JSON.stringify([
+          ["notional", v.cost > 0 ? usd(v.cost) : "unpriced"],
+          ["calls", String(v.calls) + (v.unpriced_calls ? " (" + v.unpriced_calls + " unpriced)" : "")],
+          ["output", num(v.output)], ["cache read", num(v.cache_read)]]))}"/></g>`;
+  }).join("");
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Notional spend by project">${body}</svg>` + note;
+  wireTips("#chart-proj");
+}
+
+// ---------- recent 5h blocks ----------
+function chartBlock(u) {
+  const b = u.blocks.slice(-24);
+  if (!b.length) { $("#chart-block").innerHTML = "<p class=\"sub\">no blocks yet</p>"; return; }
+  const W = 1000, H = 170, PL = 52, PR = 8, PT = 10, PB = 26;
+  const iw = W-PL-PR, ih = H-PT-PB;
+  const max = Math.max(...b.map(x => x.cost), 0.01);
+  const step = iw/b.length, bw = Math.min(34, step*0.68);
+  let g = "";
+  for (let i = 0; i <= 3; i++) {
+    const y = PT + ih - ih*i/3;
+    g += `<line class="gl" x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}"/>
+          <text class="ax" x="${PL-8}" y="${y+3.5}" text-anchor="end">${usd(max*i/3)}</text>`;
+  }
+  const bars = b.map((x, i) => {
+    const px = PL + step*i + (step-bw)/2, h = Math.max(1.5, ih*x.cost/max);
+    return `<g><rect x="${px}" y="${PT+ih-h}" width="${bw}" height="${h}" rx="3" fill="${cssv("--s3")}"/>
+      <rect x="${PL+step*i}" y="${PT}" width="${step}" height="${ih}" fill="transparent"
+        data-t="${esc(x.start.slice(0,16).replace("T"," "))}" data-r="${attrq(JSON.stringify([
+          ["notional", usd(x.cost)], ["tokens", num(x.tokens)], ["calls", String(x.calls)]]))}"/>
+      ${i % 3 === 0 ? `<text class="ax" x="${px+bw/2}" y="${H-8}" text-anchor="middle">${x.start.slice(5,10)}</text>` : ""}</g>`;
+  }).join("");
+  $("#chart-block").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Recent five hour blocks">${g}${bars}</svg>`;
+  wireTips("#chart-block");
+}
+
+function wireTips(sel) {
+  $(sel).querySelectorAll("[data-t]").forEach(el => {
+    el.style.cursor = "crosshair";
+    el.onmousemove = e => showTip(e, el.dataset.t, JSON.parse(el.dataset.r));
+    el.onmouseleave = hideTip;
+  });
+}
+
+// ---------- tables (the accessible view of the same data) ----------
+function renderTables(u) {
+  const head = `<tr><th>Model</th><th class="r">Calls</th><th class="r">Output</th>
+    <th class="r">Cache read</th><th class="r">Notional</th></tr>`;
+  $("#tbl-model").innerHTML = head + Object.entries(u.by_model)
+    .sort((a,b) => b[1].cost - a[1].cost).map(([m,v]) =>
+      `<tr><td>${esc(shortModel(m))}</td><td class="r">${v.calls}</td><td class="r">${num(v.output)}</td>
+       <td class="r">${num(v.cache_read)}</td><td class="r">${v.cost > 0 ? usd(v.cost) : "unpriced"}</td></tr>`).join("");
+
+  const dhead = `<tr><th>Day</th><th class="r">Calls</th><th class="r">Output</th>
+    <th class="r">Cache read</th><th class="r">Notional</th></tr>`;
+  $("#tbl-day").innerHTML = dhead + Object.keys(u.by_day).sort().reverse().map(d => {
+    const v = u.by_day[d];
+    return `<tr><td>${d}</td><td class="r">${v.calls}</td><td class="r">${num(v.output)}</td>
+      <td class="r">${num(v.cache_read)}</td><td class="r">${usd(v.cost)}</td></tr>`;
+  }).join("");
+
+  $("#toggle-table").onclick = () => {
+    const t = $("#tbl-day");
+    t.classList.toggle("hidden");
+    $("#toggle-table").textContent = t.classList.contains("hidden") ? "show all days" : "hide days";
+  };
+}
+
+function fmtDur(s) {
+  if (!s) return "—";
+  const h = Math.floor(s/3600), m = Math.floor(s%3600/60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function chartSessions(u) {
+  const rows = (u.sessions || []).filter(s => s.cost > 0).slice(0, 12);
+  const host = $("#chart-sessions");
+  if (!rows.length) { host.innerHTML = `<p class="sub">no priced sessions yet</p>`; return; }
+  const max = rows[0].cost, W = 1000, rh = 38, PL = 300, PR = 120;
+  const body = rows.map((s, i) => {
+    const y = i*rh + 6, w = Math.max(2, (W-PL-PR) * s.cost / max);
+    const label = `${s.label.length > 34 ? "…" + s.label.slice(-33) : s.label}`;
+    const when = (s.started || "").slice(0, 10);
+    return `<g><text class="dl" x="${PL-12}" y="${y+13}" text-anchor="end">${esc(label)}</text>
+      <text x="${PL-12}" y="${y+26}" text-anchor="end" font-size="10.5" fill="${cssv("--text-muted")}">${esc(when)} · ${esc(fmtDur(s.duration_seconds))}</text>
+      <rect x="${PL}" y="${y+6}" width="${w}" height="18" rx="4" fill="${cssv(s.source === "cli" ? "--s2" : "--s1")}"/>
+      <text class="dl" x="${PL+w+10}" y="${y+19}">${usd(s.cost)}</text>
+      <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
+        data-t="${esc(s.label)}" data-r="${attrq(JSON.stringify([
+          ["notional", usd(s.cost)], ["calls", String(s.calls)],
+          ["subagent calls", String(s.subagent_calls)],
+          ["output", num(s.output)], ["cache read", num(s.cache_read)],
+          ["model", s.top_model ? shortModel(s.top_model) : "—"],
+          ["source", s.source], ["duration", fmtDur(s.duration_seconds)]]))}"/></g>`;
+  }).join("");
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${rows.length*rh+10}" role="img"
+      aria-label="Most expensive sessions">${body}</svg>
+    <p style="font-size:11.5px;color:var(--text-muted);margin:14px 0 0;line-height:1.55">
+      One row per session, ranked by notional cost. Calls made by subagents are counted
+      against the session that spawned them. Blue is Cowork, orange is the CLI.</p>`;
+  wireTips("#chart-sessions");
+}
+
+function renderCharts(u) { chartDay(u); chartSource(u); chartProj(u); chartSessions(u); chartBlock(u); }
+
+// ---------- boot ----------
+async function load() {
+  try {
+    const u = await (await fetch("/api/usage")).json();
+    STATE.usage = u;
+    $("#sub").textContent = `${u.record_count.toLocaleString()} API calls across ${u.day_count} active days`
+      + (u.first_day ? ` · ${u.first_day} to ${u.last_day}` : "")
+      + " · Cowork desktop + Claude Code CLI on this Mac";
+    renderTiles(u); renderCharts(u); renderTables(u);
+    const un = u.unpriced_models.filter(m => m !== "<synthetic>");
+    $("#demo-banner").innerHTML = u.demo
+      ? `<div class="note" style="border-left-color:var(--good);margin-bottom:14px">
+          <strong>Demo mode.</strong> Project and session names are replaced with stable
+          pseudonyms so this page is safe to screenshot. Every number is real.</div>`
+      : "";
+    $("#foot").innerHTML = "Notional spend applies published API list prices to your token counts. "
+      + "Your subscription is not billed this way, so read it as a size signal, not an invoice. "
+      + "Cache reads are the bulk of the token volume and are priced at a tenth of input, "
+      + "which is why long agentic sessions dominate these totals."
+      + (un.length ? ` <strong>${un.length} model(s) have no price entry: ${esc(un.join(", "))}. Add them to pricing.json.</strong>` : "")
+      + ` Days are cut in ${esc(u.timezone || "your local zone")}.`
+      + ` <a href="/api/export" style="color:var(--s1)">Export everything as JSON</a>.`;
+  } catch (e) {
+    $("#sub").textContent = "could not read usage: " + e.message;
+  }
+  try {
+    STATE.limits = await (await fetch("/api/limits")).json();
+    renderMeters(STATE.limits);
+  } catch (e) {
+    renderMeters({ok: false, error: e.message, windows: []});
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

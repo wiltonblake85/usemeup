@@ -1,0 +1,20 @@
+# The index and everything derived from it. It contains the names of every
+# directory you have worked in, so it must never reach a public repo.
+*.db
+*.db-journal
+*.db-wal
+.usemeup/
+usemeup-export.json
+
+# Screenshots taken outside demo mode will contain real project paths.
+# Keep a docs/ folder for demo-mode images instead.
+screenshots-private/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+.DS_Store
+.idea/
+.vscode/
