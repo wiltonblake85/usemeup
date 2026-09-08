@@ -202,8 +202,10 @@ def record_limit_sample(windows):
         return 0
     db = connect()
     db.executemany("INSERT OR REPLACE INTO limit_samples VALUES (?,?,?,?)", rows)
-    # Keep it small; anything older than 30 days cannot inform a 7-day window.
-    cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=30)).isoformat()
+    # The daily view keeps the current week plus four prior ones (daily.WEEKS_KEPT),
+    # so anything past 90 days is unreachable. Three keys at one row per five
+    # minutes is under 80k rows for the whole retention, a few megabytes at most.
+    cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=90)).isoformat()
     db.execute("DELETE FROM limit_samples WHERE ts < ?", (cutoff,))
     db.commit()
     db.close()

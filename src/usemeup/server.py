@@ -9,6 +9,11 @@ Binds 127.0.0.1, so nothing outside this machine can reach it.
   GET /api/limits   live rate-limit state (reads Keychain, calls api.anthropic.com)
   GET /api/ingest   force a re-scan of the transcript folders
   GET /api/export   everything as one JSON download
+
+While the server runs it also samples the rate-limit windows itself, once every
+SAMPLE_EVERY seconds, so the daily view is not blind whenever the page is closed.
+It goes through the same cache, TTL and 429 back-off as the page, so the total
+call rate to api.anthropic.com is unchanged: at most one probe per five minutes.
 """
 import http.server
 import json
@@ -23,6 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 from . import burn
 from . import config
+from . import daily
 from . import parse_usage
 from . import rate_limits
 from . import store
@@ -63,7 +69,17 @@ def _usage():
     return _cache["usage"]
 
 
+_limits_lock = threading.Lock()
+
+
 def _limits():
+    # Serialised: the page, a second tab and the sampler thread can all ask at
+    # once, and only one of them should ever probe the API for the same answer.
+    with _limits_lock:
+        return _limits_unlocked()
+
+
+def _limits_unlocked():
     cur, age = _cache["limits"], time.time() - _cache["limits_at"]
     if cur:
         if cur.get("ok"):
@@ -106,9 +122,37 @@ def _limits():
             burn.attach(d["windows"], store.limit_samples)
         except Exception as e:
             d["burn_error"] = "%s: %s" % (type(e).__name__, e)
+        try:
+            daily.attach(d["windows"], store.limit_samples)
+        except Exception as e:
+            d["daily_error"] = "%s: %s" % (type(e).__name__, e)
 
     _cache["limits"], _cache["limits_at"] = d, time.time()
     return d
+
+
+SAMPLE_EVERY = TTL_LIMITS    # one probe per cache lifetime; never more than the page alone
+
+
+def _sampler():
+    """Keep the sample history filling while the page is closed.
+
+    _limits() owns every rule about when a probe is allowed (cache TTL, error
+    TTL, 429 back-off), so this loop just asks on a timer and lets it decide.
+    Failures are already recorded in the cache; nothing to do here but wait.
+    """
+    while True:
+        time.sleep(SAMPLE_EVERY)
+        try:
+            _limits()
+        except Exception:
+            pass
+
+
+def start_sampler():
+    t = threading.Thread(target=_sampler, name="usemeup-sampler", daemon=True)
+    t.start()
+    return t
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -168,7 +212,8 @@ if __name__ == "__main__":
     else:
         print("  ingest problem: %s" % (info or {}).get("error"), flush=True)
 
-    print(config.banner())
+    print(config.banner(), flush=True)
+    start_sampler()
     threading.Timer(1.0, lambda: webbrowser.open("http://127.0.0.1:%d/" % PORT)).start()
     try:
         Server(("127.0.0.1", PORT), Handler).serve_forever()

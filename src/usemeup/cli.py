@@ -8,6 +8,7 @@ cli.py - the usemeup command.
     usemeup ingest          re-scan transcripts without starting the server
     usemeup daily           a terminal table, no browser needed
     usemeup prices          show the resolved price table and where it came from
+    usemeup agent install   keep it running 24/7 as a macOS LaunchAgent
 """
 import argparse
 import sys
@@ -41,7 +42,8 @@ def cmd_serve(args):
             format(info["files_unchanged"], ","), info["seconds"]), flush=True)
     else:
         print("  ingest problem: %s" % (info or {}).get("error"), flush=True)
-    print(config.banner())
+    print(config.banner(), flush=True)
+    server.start_sampler()
     if not args.no_open:
         import threading
         import webbrowser
@@ -118,6 +120,15 @@ def cmd_prices(args):
     return 0
 
 
+def cmd_agent(args):
+    from . import agent
+    if args.action == "install":
+        return agent.install(auto_refresh=not args.no_auto_refresh, port=args.port)
+    if args.action == "uninstall":
+        return agent.uninstall()
+    return agent.status()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="usemeup",
@@ -146,6 +157,13 @@ def main(argv=None):
     pr = sub.add_parser("prices", help="show the resolved price table and its source")
     pr.add_argument("--refresh", action="store_true", help="force a re-fetch")
     pr.set_defaults(fn=cmd_prices)
+
+    ag = sub.add_parser("agent", help="run the dashboard as a macOS LaunchAgent (24/7)")
+    ag.add_argument("action", choices=["install", "uninstall", "status"])
+    ag.add_argument("--port", type=int, help="serve on this port (default 8787)")
+    ag.add_argument("--no-auto-refresh", action="store_true",
+                    help="do not let the agent renew an expired Claude Code token")
+    ag.set_defaults(fn=cmd_agent)
 
     args = ap.parse_args(argv)
     if not args.cmd:

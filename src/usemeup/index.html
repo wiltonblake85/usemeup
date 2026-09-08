@@ -46,9 +46,9 @@ h1{font-size:19px;margin:0;letter-spacing:-.01em;font-weight:600}
 .tile .n{font-size:11.5px;color:var(--text-muted);margin-top:3px}
 .meter{margin-bottom:26px}
 .meter:last-child{margin-bottom:0}
-.meter .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px;gap:12px}
-.meter .nm{font-size:13px;font-weight:500;display:flex;align-items:center;gap:7px}
-.meter .rt{font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.meter .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px;gap:6px 12px;flex-wrap:wrap}
+.meter .nm{font-size:13px;font-weight:500;display:flex;align-items:center;gap:4px 7px;flex-wrap:wrap;min-width:0}
+.meter .rt{font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .track{height:9px;background:var(--surface-0);border:1px solid var(--line);border-radius:5px;overflow:hidden}
 .fill{height:100%;border-radius:4px 0 0 4px;transition:width .4s ease}
 .dot{width:8px;height:8px;border-radius:50%;flex:none}
@@ -79,6 +79,17 @@ th.r,td.r{text-align:right;padding-right:0}
 #tip .tr{display:flex;justify-content:space-between;gap:16px;color:var(--text-secondary);
   font-variant-numeric:tabular-nums}
 .hidden{display:none}
+/* Tables and charts never widen the page; they scroll inside their own box. */
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tscroll table{min-width:420px}
+.card header{flex-wrap:wrap}
+@media (max-width:640px){
+  .wrap{padding:18px 12px 48px}
+  .card{padding:14px 14px;border-radius:8px}
+  .tile{padding:12px 14px}
+  .tile .v{font-size:22px}
+  .meter .row{flex-direction:column;align-items:flex-start;gap:2px}
+}
 </style>
 </head>
 <body>
@@ -135,8 +146,8 @@ th.r,td.r{text-align:right;padding-right:0}
       <h2 style="margin:0">By model</h2>
       <button class="btn" id="toggle-table">show all days</button>
     </header>
-    <table id="tbl-model"></table>
-    <table id="tbl-day" class="hidden" style="margin-top:18px"></table>
+    <div class="tscroll"><table id="tbl-model"></table></div>
+    <div class="tscroll hidden" id="tbl-day-wrap" style="margin-top:18px"><table id="tbl-day"></table></div>
   </div>
 
   <p class="sub" id="foot"></p>
@@ -156,6 +167,15 @@ const dur = s => { if (s == null) return "reset time unknown";
   const h = Math.floor(s/3600), m = Math.floor(s%3600/60);
   return h ? `resets in ${h}h ${m}m` : `resets in ${m}m`; };
 const shortModel = m => m.replace(/^claude-/, "").replace(/-(\d{8})$/, "");
+
+// Charts are drawn at the host's real pixel width, so one SVG unit is one CSS
+// pixel and labels keep their size in a narrow window. A fixed 1000-unit viewBox
+// scaled everything down together and left 4px axis text at phone widths.
+const widthOf = sel => { const el = $(sel), w = el && el.clientWidth; return w > 240 ? w : 1000; };
+const NARROW = 620;   // below this, horizontal bar charts stack the label above the bar
+// Longest label that fits in px pixels of 11px text, with an ellipsis if cut.
+const fitLabel = (s, px) => { const n = Math.max(6, Math.floor(px / 6.4));
+  return s.length > n ? "…" + s.slice(-(n - 1)) : s; };
 
 $("#theme").onclick = () => {
   const cur = document.documentElement.getAttribute("data-theme");
@@ -185,8 +205,8 @@ const sevOf = p => p >= 90 ? "critical" : p >= 75 ? "serious" : p >= 50 ? "warni
 // Fill = share of the allowance consumed. Marker = where the clock actually is.
 // The API reports one cumulative figure for the week, not a per-day split, so the
 // segments are calendar days, not daily consumption bars.
-function dayTrack(w) {
-  const N = w.segments || 7, G = 3, W = 1000, CH = 15;
+function dayTrack(w, W) {
+  const N = w.segments || 7, G = 3, CH = 15;
   const cw = (W - G * (N - 1)) / N, cx = i => i * (cw + G);
   const used = Math.max(0, Math.min(1, w.used_pct / 100));
   const haveClock = w.window_seconds && w.resets_in_seconds != null;
@@ -208,7 +228,9 @@ function dayTrack(w) {
       cells += `<rect x="${x}" y="0" width="${Math.max(2.5, local * cw)}" height="${CH}" rx="3" fill="${fill}"/>`;
     if (start) {
       const d = new Date(start.getTime() + i * 86400000 + 43200000);  // midpoint, not start
-      const lab = d.toLocaleDateString(undefined, { weekday: "short" }) + " " + d.getDate();
+      // A 7-cell track under ~380px cannot fit "Mon 7" per cell; drop to the day number.
+      const lab = (cw >= 46 ? d.toLocaleDateString(undefined, { weekday: "short" }) + " " : "")
+        + d.getDate();
       const on = i === nowCell;
       labels += `<text x="${x + cw / 2}" y="${CH + 16}" text-anchor="middle" font-size="10.5"
         fill="${on ? ink : muted}" font-weight="${on ? 600 : 400}">${esc(lab)}</text>`;
@@ -223,6 +245,135 @@ function dayTrack(w) {
   return `<svg viewBox="0 -12 ${W} ${CH + 34}" role="img"
     aria-label="${esc(w.name)}: ${w.used_pct}% used, ${Math.round((elapsed||0)*100)}% of the week elapsed">
     ${cells}${marker}${labels}</svg>`;
+}
+
+// The weekly window as seven daily buckets: one seventh of the week per day,
+// spent or banked. Days cut at the reset hour, so the seven bars sum to the
+// weekly figure. Solid = measured while something was sampling; hatched = a
+// rise that happened in a gap, spread across it (estimated). The part of a bar
+// above the share line is the overspend and is drawn in the critical colour.
+function dailyChart(w, W) {
+  const D = w.daily, wk = D && D.weeks && D.weeks.find(x => x.current);
+  if (!wk) return "";
+  const share = D.allotment_pct, days = wk.days;
+  // The axis follows what was spent, not what could be: after a quiet stretch
+  // the available figure can be four times the share and would flatten the bars.
+  const maxV = Math.max(share * 2.2, ...days.map(d => d.consumed_pct * 1.15));
+  const H = W < NARROW ? 204 : 224, PL = 40, PR = 12, PT = 32, PB = 32;   // PT leaves room for a gap bracket
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const step = iw / 7, bw = Math.min(64, step * 0.62);
+  const y = v => PT + ih - ih * Math.max(0, v) / maxV;
+  const ink = cssv("--text-primary"), muted = cssv("--text-muted"), line = cssv("--line");
+  const track = cssv("--surface-0"), danger = cssv("--critical");
+  const hue = cssv("--" + sevOf(w.used_pct));
+  const pid = "hatch-" + String(w.key || "w").replace(/[^a-z0-9_]/gi, "");
+  let g = `<defs><pattern id="${pid}" width="6" height="6" patternUnits="userSpaceOnUse"
+      patternTransform="rotate(45)"><rect width="6" height="6" fill="${hue}" opacity=".22"/>
+      <line x1="0" y1="0" x2="0" y2="6" stroke="${hue}" stroke-width="2"/></pattern></defs>`;
+  // Recessive grid at 0, share, 2x share.
+  for (const v of [0, share, share * 2]) {
+    if (v > maxV) continue;
+    g += `<line x1="${PL}" y1="${y(v)}" x2="${W - PR}" y2="${y(v)}" stroke="${line}" stroke-width="1"/>
+          <text x="${PL - 7}" y="${y(v) + 3.5}" text-anchor="end" font-size="10" fill="${muted}">${v ? v.toFixed(0) + "%" : "0"}</text>`;
+  }
+  // The daily share, drawn heavier than the grid.
+  g += `<line x1="${PL}" y1="${y(share)}" x2="${W - PR}" y2="${y(share)}" stroke="${ink}"
+        stroke-width="1.2" stroke-dasharray="4 3" opacity=".6"/>
+        <text x="${W - PR}" y="${y(share) - 4}" text-anchor="end" font-size="10" fill="${muted}">daily share ${share.toFixed(1)}%</text>`;
+  // A bucket that opens at 8 PM Tuesday is Wednesday to anyone reading it, so
+  // the label comes from the bucket's midpoint, not its opening moment.
+  const fmtDay = iso => { const d = new Date(new Date(iso).getTime() + 43200000);
+    return d.toLocaleDateString(undefined, { weekday: "short" }) + (bw >= 34 ? " " + d.getDate() : ""); };
+  let bars = "";
+  days.forEach((d, i) => {
+    const x = PL + step * i + (step - bw) / 2, xm = x + bw / 2;
+    const today = d.status === "today", future = d.status === "future";
+    const c = d.consumed_pct, m = d.measured_pct, e = d.estimated_pct;
+    bars += `<rect x="${x}" y="${y(maxV)}" width="${bw}" height="${ih}" rx="3" fill="${track}" opacity=".6"/>`;
+    if (!future && c > 0) {
+      // Measured sits on the baseline, estimated stacks above it, 2px surface gap between.
+      const yM = y(m), yE = y(c);
+      if (m > 0) bars += `<rect x="${x}" y="${yM}" width="${bw}" height="${Math.max(1.5, y(0) - yM)}" rx="3" fill="${hue}"/>`;
+      if (e > 0) bars += `<rect x="${x}" y="${yE}" width="${bw}" height="${Math.max(1.5, yM - yE - (m > 0 ? 2 : 0))}" rx="3" fill="url(#${pid})" stroke="${hue}" stroke-width="1"/>`;
+      // Overspend: the slice above the share line, restated in the critical colour.
+      if (c > share) bars += `<rect x="${x}" y="${yE}" width="${bw}" height="${y(share) - yE}" rx="3" fill="${danger}" opacity=".9"/>
+        <text x="${xm}" y="${yE - 4}" text-anchor="middle" font-size="10.5" font-weight="600" fill="${danger}">+${(c - share).toFixed(1)} over</text>`;
+      else bars += `<text x="${xm}" y="${yE - 4}" text-anchor="middle" font-size="10.5" fill="${ink}">${c.toFixed(1)}%</text>`;
+    }
+    if (today && d.available_pct != null && d.available_pct > 0) {
+      // What today may spend: the share plus whatever earlier days banked.
+      // Clamped to the top edge when it exceeds the axis; the label says so.
+      const above = d.available_pct > maxV, ya = above ? y(maxV) : y(d.available_pct);
+      bars += `<line x1="${x - 3}" y1="${ya}" x2="${x + bw + 3}" y2="${ya}" stroke="${ink}" stroke-width="1.5" stroke-dasharray="2 2"/>`;
+      if (Math.abs(d.available_pct - share) > 0.5 && (c <= share || ya < y(c) - 14))
+        bars += `<text x="${xm}" y="${ya - 4}" text-anchor="middle" font-size="10" fill="${muted}">${above ? "up to " : ""}${d.available_pct.toFixed(1)} avail</text>`;
+    }
+    const rows = [["consumed", c.toFixed(2) + "% of the week"], ["measured", m.toFixed(2) + "%"],
+      ["estimated", e.toFixed(2) + "%"], ["daily share", share.toFixed(2) + "%"]];
+    if (d.over_pct != null) rows.push([d.over_pct > 0 ? "over share" : "under share", Math.abs(d.over_pct).toFixed(2) + "%"]);
+    if (d.bank_after_pct != null) rows.push(["banked after", (d.bank_after_pct >= 0 ? "+" : "") + d.bank_after_pct.toFixed(2) + "%"]);
+    if (d.available_pct != null) rows.push(["available today", d.available_pct.toFixed(2) + "%"], ["left today", d.remaining_pct.toFixed(2) + "%"]);
+    const t0 = new Date(d.start), t1 = new Date(d.end);
+    const title = `${fmtDay(d.start)} · ${t0.toLocaleTimeString([], {hour: "numeric"})} to ${t1.toLocaleTimeString([], {hour: "numeric"})}${today ? " (today)" : ""}`;
+    bars += `<rect x="${PL + step * i}" y="${PT}" width="${step}" height="${ih}" fill="transparent"
+      data-t="${attrq(title)}" data-r="${attrq(JSON.stringify(rows))}"/>
+      <text x="${xm}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="${today ? ink : muted}"
+        font-weight="${today ? 600 : 400}">${esc(fmtDay(d.start))}</text>`;
+  });
+  // Unsampled stretches that crossed a day boundary: a bracket over the days
+  // they touch, with the amount that accrued. The hatched bars under it are an
+  // even spread, which claims nothing about when inside the gap it happened.
+  const wkStart = new Date(wk.window_start).getTime();
+  const tx = t => PL + iw * Math.max(0, Math.min(1, (new Date(t).getTime() - wkStart) / (7 * 86400000)));
+  let brackets = "";
+  (wk.gaps || []).forEach((gp, k) => {
+    const days_ = gp.seconds / 86400;
+    const b0 = Math.floor((new Date(gp.start).getTime() - wkStart) / 86400000);
+    const b1 = Math.floor((new Date(gp.end).getTime() - wkStart - 1) / 86400000);
+    if (b0 === b1 && gp.seconds < 6 * 3600) return;   // brief and inside one day: the hatch says enough
+    const x0 = tx(gp.start), x1 = tx(gp.end), yb = PT - 6;
+    if (x1 - x0 < 24) return;
+    const label = `${gp.pct.toFixed(1)}% over ${days_ >= 1 ? days_.toFixed(1) + " days" : Math.round(gp.seconds / 3600) + " h"} not sampled, timing unknown`;
+    brackets += `<path d="M${x0.toFixed(1)},${yb + 5} L${x0.toFixed(1)},${yb} L${x1.toFixed(1)},${yb} L${x1.toFixed(1)},${yb + 5}"
+        fill="none" stroke="${muted}" stroke-width="1"/>
+      <text x="${((x0 + x1) / 2).toFixed(1)}" y="${yb - 3}" text-anchor="middle" font-size="10" fill="${muted}">${esc(label)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" data-daily="1"
+    aria-label="${esc(w.name)} as seven daily buckets of ${share.toFixed(1)}% each">${g}${bars}${brackets}</svg>`;
+}
+
+function dailyLine(w) {
+  const D = w.daily, wk = D && D.weeks && D.weeks.find(x => x.current);
+  if (!wk) return D && D.error
+    ? `<div style="font-size:11.5px;color:var(--warning);margin-top:8px">daily view unavailable: ${esc(D.error)}</div>` : "";
+  const share = D.allotment_pct, t = wk.today;
+  const reset = new Date(wk.resets_at);
+  const hour = reset.toLocaleTimeString([], { hour: "numeric" });
+  const bank = wk.bank_before_today_pct;
+  let today = "";
+  if (t) {
+    const used = t.consumed_pct, left = t.remaining_pct;
+    today = `Today (${hour} to ${hour}): <strong style="color:var(--text-primary)">${used.toFixed(1)}%</strong> of a ${share.toFixed(1)}% share`
+      + (bank != null && Math.abs(bank) >= 0.05
+          ? `, ${bank > 0 ? "+" : ""}${bank.toFixed(1)}% banked from earlier days` : "")
+      + ` · ${left >= 0
+          ? `<span style="color:var(--good)">${left.toFixed(1)}% left today</span>`
+          : `<span style="color:var(--critical)">${(-left).toFixed(1)}% over what today had</span>`}`;
+  }
+  const past = wk.days.filter(d => d.status === "past");
+  const over = past.filter(d => d.over_pct > 0).length;
+  const cov = Math.round((wk.coverage || 0) * 100);
+  const weekBit = ` · this week ${wk.total_pct.toFixed(0)}% used over ${past.length + (t ? 1 : 0)} of 7 days`
+    + (past.length ? `, ${over} day${over === 1 ? "" : "s"} over share` : "");
+  const unsampled = (wk.gaps || []).reduce((s, g) => s + g.pct, 0);
+  const covBit = cov < 100 && unsampled > 0
+    ? ` · <span style="color:var(--text-secondary)">${unsampled.toFixed(1)}% accrued while nothing was sampling (${cov}% of elapsed hours were). Those bars are hatched and spread evenly; the real split across those days is unknown, and the bank below assumes the even spread.</span>` : "";
+  const prior = D.weeks.filter(x => !x.current);
+  const priorBit = prior.length ? `<div style="margin-top:4px">` + prior.map(p => {
+    const o = p.days.filter(d => d.over_pct > 0).length;
+    return `week ending ${esc(new Date(p.resets_at).toLocaleDateString([], {weekday: "short", month: "numeric", day: "numeric"}))}: ${p.total_pct.toFixed(0)}% used, ${o} day${o === 1 ? "" : "s"} over share`;
+  }).join(" · ") + `</div>` : "";
+  return `<div style="font-size:11.5px;color:var(--text-muted);margin-top:8px;line-height:1.55">${today}${weekBit}${covBit}${priorBit}</div>`;
 }
 
 function paceLine(w) {
@@ -256,10 +407,10 @@ function paceLine(w) {
 //   dashed  where the current rate lands you by reset
 //   grey    the even-pace diagonal, 0% at open to 100% at reset
 // Above the diagonal means you are outrunning the window.
-function burnChart(w) {
+function burnChart(w, W) {
   const p = w.projection;
   if (!p || p.error || !p.series || p.series.length < 2) return "";
-  const W = 1000, H = 150, PL = 40, PR = 96, PT = 12, PB = 24;
+  const H = 150, PL = 40, PR = W < NARROW ? 62 : 96, PT = 12, PB = 24;
   const iw = W - PL - PR, ih = H - PT - PB;
 
   const t0 = new Date(p.window_start).getTime();
@@ -318,10 +469,12 @@ function burnChart(w) {
           <circle cx="${xe}" cy="${yCap}" r="3.5" fill="${danger}"/>`;
   }
 
-  // Now marker.
-  g += `<line x1="${x(nowT)}" y1="${PT - 4}" x2="${x(nowT)}" y2="${PT + ih + 4}" stroke="${ink}"
-        stroke-width="1.5" opacity=".55"/>
-        <text x="${x(nowT)}" y="${H - 8}" text-anchor="middle" font-size="10" fill="${ink}">now</text>`;
+  // Now marker. The word is dropped when the marker sits on top of either end
+  // label (a window that just opened or is about to reset); the line still shows.
+  const xn = x(nowT), nowClear = xn - PL > 44 && (W - PR) - xn > 44;
+  g += `<line x1="${xn}" y1="${PT - 4}" x2="${xn}" y2="${PT + ih + 4}" stroke="${ink}"
+        stroke-width="1.5" opacity=".55"/>` + (nowClear
+        ? `<text x="${xn}" y="${H - 8}" text-anchor="middle" font-size="10" fill="${ink}">now</text>` : "");
 
   const shortWindow = span < 36 * 3600 * 1000;   // a 5h window needs clock times
   const fmt = iso => shortWindow
@@ -387,6 +540,7 @@ function renderMeters(d) {
       ${FIXES[d.stale_kind] ? "<br><br><strong>Fix:</strong> " + FIXES[d.stale_kind] : ""}
       <br><br>Percentages below are from that earlier check and are no longer live. Countdowns are current.</div>` : "";
 
+  const W = widthOf("#meters");
   el.innerHTML = staleBanner + d.windows.map(w => {
     const p = w.used_pct, st = sevOf(p);
     const icon = { good: "●", warning: "▲", serious: "▲", critical: "■" }[st];
@@ -394,10 +548,16 @@ function renderMeters(d) {
     if (w.binding) flags.push("binding window");
     if (w.status && !["allowed", "normal", "ok"].includes(w.status)) flags.push(esc(w.status));
     if (d.stale) flags.push("stale");
+    const hasDaily = !!(w.daily && w.daily.weeks && w.daily.weeks.some(x => x.current));
+    const legend = hasDaily ? `<div class="legend" style="margin:2px 0 6px;font-size:11.5px">
+        <span><i class="sw" style="background:var(--${st})"></i>measured</span>
+        <span><i class="sw" style="background:repeating-linear-gradient(45deg,var(--${st}) 0 2px,transparent 2px 5px);border:1px solid var(--${st})"></i>not sampled, spread evenly</span>
+        <span><i class="sw" style="background:var(--critical)"></i>over the daily share</span>
+        <span><i class="sw" style="border-top:2px dashed var(--text-primary);height:0;border-radius:0"></i>available today</span></div>` : "";
     const body = (w.segments
-      ? dayTrack(w) + paceLine(w)
+      ? (hasDaily ? legend + dailyChart(w, W) + dailyLine(w) : dayTrack(w, W)) + paceLine(w)
       : `<div class="track"><div class="fill" style="width:${Math.max(p, p > 0 ? 0.6 : 0)}%;background:var(--${st})"></div></div>`)
-      + projectionLine(w) + burnChart(w);
+      + projectionLine(w) + burnChart(w, W);
     return `<div class="meter" style="${d.stale ? "opacity:.72" : ""}">
       <div class="row">
         <span class="nm"><span class="dot" style="background:var(--${st})"></span>${esc(w.name)}
@@ -409,8 +569,9 @@ function renderMeters(d) {
     </div>`;
   }).join("") + `<p style="font-size:11.5px;color:var(--text-muted);margin:18px 0 0">
     live from api.anthropic.com · account-wide, so this covers Cowork and claude.ai too, not just this Mac
-    · the vertical marker is now · checked every 5 min while this page is open
+    · sampled every 5 min while the server runs, page open or not
     · last checked ${esc((d.checked_at || "").slice(11, 16))} UTC</p>`;
+  wireTips("#meters");
 }
 
 // ---------- stat tiles ----------
@@ -462,7 +623,7 @@ function chartDay(u) {
   $("#legend-day").innerHTML = models.map(m =>
     `<span><i class="sw" style="background:${color(m)}"></i>${esc(shortModel(m))}</span>`).join("");
 
-  const W = 1000, H = 250, PL = 56, PR = 8, PT = 10, PB = 26;
+  const W = widthOf("#chart-day"), H = W < NARROW ? 200 : 250, PL = 52, PR = 8, PT = 10, PB = 26;
   const iw = W - PL - PR, ih = H - PT - PB;
   const max = Math.max(...days.map(d => u.by_day[d].cost), 0.01);
   const step = iw / days.length, bw = Math.min(38, step * 0.72);
@@ -472,7 +633,8 @@ function chartDay(u) {
     g += `<line class="gl" x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}"/>
           <text class="ax" x="${PL-8}" y="${y+3.5}" text-anchor="end">${usd(max*i/4)}</text>`;
   }
-  const every = Math.max(1, Math.ceil(days.length / 12));  // ~12 labels, never more
+  // One "MM-DD" label needs ~44px; label as many days as the width can carry, never more than 12.
+  const every = Math.max(1, Math.ceil(days.length / Math.max(3, Math.min(12, Math.floor(iw / 44)))));
   let bars = "";
   days.forEach((d, i) => {
     const x = PL + step * i + (step - bw) / 2;
@@ -491,7 +653,8 @@ function chartDay(u) {
     rows.push(["total", usd(u.by_day[d].cost)], ["calls", String(u.by_day[d].calls)]);
     bars += `<g>${parts}<rect x="${PL+step*i}" y="${PT}" width="${step}" height="${ih}" fill="transparent"
       data-t="${esc(d)}" data-r="${attrq(JSON.stringify(rows))}"/></g>`;
-    if (i % every === 0 || i === days.length - 1)
+    // Always label the last day unless it would sit on top of the previous label.
+    if (i % every === 0 || (i === days.length - 1 && i % every > every / 2))
       bars += `<text class="ax" x="${x+bw/2}" y="${H-8}" text-anchor="middle">${d.slice(5)}</text>`;
   });
   $("#chart-day").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Notional spend by day">${g}${bars}</svg>`;
@@ -510,12 +673,18 @@ function chartSource(u) {
   const rows = Object.entries(u.by_source).sort((a, b) => b[1].cost - a[1].cost);
   if (!rows.length) { $("#chart-source").innerHTML = "<p class=\"sub\">nothing indexed</p>"; return; }
   const total = rows.reduce((s, [, v]) => s + v.cost, 0) || 1;
-  const W = 1000, rh = 40, PL = 210, PR = 130;
+  const W = widthOf("#chart-source"), narrow = W < NARROW;
+  // Wide: label left of the bar. Narrow: label on its own line above it.
+  const rh = narrow ? 52 : 40, PL = narrow ? 0 : 210, PR = 130;
   const body = rows.map(([name, v], i) => {
     const y = i * rh + 6, w = Math.max(2, (W - PL - PR) * v.cost / (rows[0][1].cost || 1));
-    return `<g><text class="dl" x="${PL-12}" y="${y+16}" text-anchor="end">${esc(SOURCE_NAMES[name] || name)}</text>
-      <rect x="${PL}" y="${y+4}" width="${w}" height="18" rx="4" fill="${cssv(i ? "--s2" : "--s1")}"/>
-      <text class="dl" x="${PL+w+10}" y="${y+17}">${usd(v.cost)} · ${(v.cost/total*100).toFixed(0)}%</text>
+    const by = narrow ? y + 20 : y + 4;   // bar top
+    const label = fitLabel(SOURCE_NAMES[name] || name, narrow ? W : PL - 12);
+    return `<g>${narrow
+        ? `<text class="dl" x="0" y="${y+12}">${esc(label)}</text>`
+        : `<text class="dl" x="${PL-12}" y="${y+16}" text-anchor="end">${esc(label)}</text>`}
+      <rect x="${PL}" y="${by}" width="${w}" height="18" rx="4" fill="${cssv(i ? "--s2" : "--s1")}"/>
+      <text class="dl" x="${PL+w+10}" y="${by+13}">${usd(v.cost)} · ${(v.cost/total*100).toFixed(0)}%</text>
       <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
         data-t="${esc(SOURCE_NAMES[name] || name)}" data-r="${attrq(JSON.stringify([
           ["notional", usd(v.cost)], ["calls", String(v.calls)],
@@ -550,13 +719,18 @@ function chartProj(u) {
 
   if (!rows.length) { host.innerHTML = `<p class="sub">no project usage recorded yet</p>` + note; return; }
 
-  const max = rows[0][1].cost || 1, W = 1000, rh = 34, H = rows.length * rh + 8, PL = 250, PR = 100;
+  const max = rows[0][1].cost || 1, W = widthOf("#chart-proj"), narrow = W < NARROW;
+  const rh = narrow ? 48 : 34, H = rows.length * rh + 8;
+  const PL = narrow ? 0 : Math.min(250, Math.round(W * 0.3)), PR = 100;
   const body = rows.map(([name, v], i) => {
     const y = i * rh + 6, w = Math.max(2, (W - PL - PR) * v.cost / max);
-    const label = name.length > 36 ? "…" + name.slice(-35) : name;
-    return `<g><text class="dl" x="${PL-12}" y="${y+15}" text-anchor="end">${esc(label)}</text>
-      <rect x="${PL}" y="${y+3}" width="${w}" height="18" rx="4" fill="${cssv("--s1")}"/>
-      <text class="dl" x="${PL+w+10}" y="${y+16}">${v.cost > 0 ? usd(v.cost) : v.calls + " calls"}</text>
+    const by = narrow ? y + 18 : y + 3;   // bar top
+    const label = fitLabel(name, narrow ? W : PL - 12);
+    return `<g>${narrow
+        ? `<text class="dl" x="0" y="${y+11}">${esc(label)}</text>`
+        : `<text class="dl" x="${PL-12}" y="${y+15}" text-anchor="end">${esc(label)}</text>`}
+      <rect x="${PL}" y="${by}" width="${w}" height="18" rx="4" fill="${cssv("--s1")}"/>
+      <text class="dl" x="${PL+w+10}" y="${by+13}">${v.cost > 0 ? usd(v.cost) : v.calls + " calls"}</text>
       <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
         data-t="${esc(name)}" data-r="${attrq(JSON.stringify([
           ["notional", v.cost > 0 ? usd(v.cost) : "unpriced"],
@@ -571,10 +745,11 @@ function chartProj(u) {
 function chartBlock(u) {
   const b = u.blocks.slice(-24);
   if (!b.length) { $("#chart-block").innerHTML = "<p class=\"sub\">no blocks yet</p>"; return; }
-  const W = 1000, H = 170, PL = 52, PR = 8, PT = 10, PB = 26;
+  const W = widthOf("#chart-block"), H = W < NARROW ? 150 : 170, PL = 52, PR = 8, PT = 10, PB = 26;
   const iw = W-PL-PR, ih = H-PT-PB;
   const max = Math.max(...b.map(x => x.cost), 0.01);
   const step = iw/b.length, bw = Math.min(34, step*0.68);
+  const every = Math.max(1, Math.ceil(b.length / Math.max(3, Math.floor(iw / 44))));
   let g = "";
   for (let i = 0; i <= 3; i++) {
     const y = PT + ih - ih*i/3;
@@ -587,7 +762,7 @@ function chartBlock(u) {
       <rect x="${PL+step*i}" y="${PT}" width="${step}" height="${ih}" fill="transparent"
         data-t="${esc(x.start.slice(0,16).replace("T"," "))}" data-r="${attrq(JSON.stringify([
           ["notional", usd(x.cost)], ["tokens", num(x.tokens)], ["calls", String(x.calls)]]))}"/>
-      ${i % 3 === 0 ? `<text class="ax" x="${px+bw/2}" y="${H-8}" text-anchor="middle">${x.start.slice(5,10)}</text>` : ""}</g>`;
+      ${i % every === 0 ? `<text class="ax" x="${px+bw/2}" y="${H-8}" text-anchor="middle">${x.start.slice(5,10)}</text>` : ""}</g>`;
   }).join("");
   $("#chart-block").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Recent five hour blocks">${g}${bars}</svg>`;
   wireTips("#chart-block");
@@ -619,7 +794,7 @@ function renderTables(u) {
   }).join("");
 
   $("#toggle-table").onclick = () => {
-    const t = $("#tbl-day");
+    const t = $("#tbl-day-wrap");
     t.classList.toggle("hidden");
     $("#toggle-table").textContent = t.classList.contains("hidden") ? "show all days" : "hide days";
   };
@@ -635,15 +810,22 @@ function chartSessions(u) {
   const rows = (u.sessions || []).filter(s => s.cost > 0).slice(0, 12);
   const host = $("#chart-sessions");
   if (!rows.length) { host.innerHTML = `<p class="sub">no priced sessions yet</p>`; return; }
-  const max = rows[0].cost, W = 1000, rh = 38, PL = 300, PR = 120;
+  const max = rows[0].cost, W = widthOf("#chart-sessions"), narrow = W < NARROW;
+  const rh = narrow ? 62 : 38, PL = narrow ? 0 : Math.min(300, Math.round(W * 0.32)), PR = 90;
+  const muted = cssv("--text-muted");
   const body = rows.map((s, i) => {
     const y = i*rh + 6, w = Math.max(2, (W-PL-PR) * s.cost / max);
-    const label = `${s.label.length > 34 ? "…" + s.label.slice(-33) : s.label}`;
+    const label = fitLabel(s.label, narrow ? W : PL - 12);
     const when = (s.started || "").slice(0, 10);
-    return `<g><text class="dl" x="${PL-12}" y="${y+13}" text-anchor="end">${esc(label)}</text>
-      <text x="${PL-12}" y="${y+26}" text-anchor="end" font-size="10.5" fill="${cssv("--text-muted")}">${esc(when)} · ${esc(fmtDur(s.duration_seconds))}</text>
-      <rect x="${PL}" y="${y+6}" width="${w}" height="18" rx="4" fill="${cssv(s.source === "cli" ? "--s2" : "--s1")}"/>
-      <text class="dl" x="${PL+w+10}" y="${y+19}">${usd(s.cost)}</text>
+    const sub = `${esc(when)} · ${esc(fmtDur(s.duration_seconds))}`;
+    const by = narrow ? y + 32 : y + 6;   // bar top
+    return `<g>${narrow
+        ? `<text class="dl" x="0" y="${y+11}">${esc(label)}</text>
+           <text x="0" y="${y+24}" font-size="10.5" fill="${muted}">${sub}</text>`
+        : `<text class="dl" x="${PL-12}" y="${y+13}" text-anchor="end">${esc(label)}</text>
+           <text x="${PL-12}" y="${y+26}" text-anchor="end" font-size="10.5" fill="${muted}">${sub}</text>`}
+      <rect x="${PL}" y="${by}" width="${w}" height="18" rx="4" fill="${cssv(s.source === "cli" ? "--s2" : "--s1")}"/>
+      <text class="dl" x="${PL+w+10}" y="${by+13}">${usd(s.cost)}</text>
       <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
         data-t="${esc(s.label)}" data-r="${attrq(JSON.stringify([
           ["notional", usd(s.cost)], ["calls", String(s.calls)],
@@ -701,6 +883,18 @@ async function load() {
 }
 load();
 setInterval(load, 60000);
+
+// Charts are sized to the container at draw time, so a resize needs a redraw.
+let resizeTimer, lastW = innerWidth;
+addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (innerWidth === lastW) return;   // height-only changes do not move any chart
+    lastW = innerWidth;
+    if (STATE.usage) renderCharts(STATE.usage);
+    if (STATE.limits) renderMeters(STATE.limits);
+  }, 150);
+});
 </script>
 </body>
 </html>

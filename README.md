@@ -27,9 +27,11 @@ usemeup verify     recount from raw transcripts and check the index
 usemeup daily      a terminal table, no browser needed
 usemeup prices     show the resolved price table and where it came from
 usemeup ingest     re-scan without serving
+usemeup agent      install | status | uninstall a macOS LaunchAgent that keeps it running
 ```
 
-From a clone: `PYTHONPATH=src python3 -m usemeup.cli`.
+From a clone: `PYTHONPATH=src python3 -m usemeup.cli`. Unit tests, also stdlib
+only: `PYTHONPATH=src python3 -m unittest discover tests`.
 
 ---
 
@@ -78,10 +80,37 @@ argument for shipping the recount.
 
 ## What you get
 
-**Rate-limit windows, live.** Your 5-hour session window and 7-day windows, each
-drawn as its real calendar days with a marker showing where the clock actually is.
-The gap between the marker and the fill is a pace read: marker well ahead means the
-week's capacity will expire unused.
+**Rate-limit windows, live.** Your 5-hour session window and 7-day windows, read
+straight from the API, with the reset countdown and a pace verdict for each.
+
+**The week as seven daily buckets.** Anthropic gives you one number for the week.
+Most people plan in days, so each 7-day window is also drawn as seven bars: one
+seventh of the week (14.3%) is the day's share, a bar shows what that day actually
+consumed, and the part above the share line is the overspend, in red, with the
+amount on it. Unspent share banks forward, so a quiet Sunday means Monday can spend
+more; a heavy Tuesday draws the bank down. Today's bar carries a dashed cap at what
+it may still spend (its share plus the bank), and the line under the chart states
+it plainly: *11.5% of a 14.3% share, +46.9% banked from earlier days, 49.7% left
+today*.
+
+Days are cut at the hour the week resets, not at midnight, so the seven bars sum
+exactly to the weekly figure and the last one ends at reset. Up to four prior
+weeks are summarised under the chart as history accumulates.
+
+Two honesty rules, because this is derived, not reported. First, the API reports
+whole percent, so a day under 1% of the week reads as 0. Second, daily consumption
+is the rise in the cumulative figure while something was sampling it. The server
+samples every five minutes while it runs (see below). A rise that happened while
+it was not running is still real usage, but its timing is not known. It is spread
+evenly across the gap, drawn hatched, and bracketed on the chart with the amount:
+*24.5% over 5.4 days not sampled, timing unknown*. The bank arithmetic assumes the
+even spread and the caption says so.
+
+Evenly, and not by some cleverer proxy, on purpose. An earlier build placed gap
+usage by the token volume in the local transcript index. Cloud sessions leave no
+transcripts on this machine, so that proxy was blind to exactly the work it was
+meant to locate, and it drew four near-empty days that were in fact busy. A method
+that cannot see half the usage should not pretend to know where it went.
 
 **Burn-rate projection, as a chart.** Each window gets a burn-up chart: a solid
 line for what you have actually consumed, a dashed line for where the current rate
@@ -133,9 +162,17 @@ only rather than reporting a silently partial total.
 | `parse_usage.py` | `~/.usemeup/usage.db` | none | none |
 | `pricing.py` | the cache, the bundled table | **raw.githubusercontent.com** (public file, GET) | none |
 | `burn.py` | recorded samples | none | none |
+| `daily.py` | recorded samples | none | none |
+| `agent.py` | writes `~/Library/LaunchAgents/…usemeup.plist`, runs `launchctl` | none | none |
 | `verify.py` | your transcripts, the index | none | none |
 | `rate_limits.py` | macOS Keychain, or `~/.claude/.credentials.json` | api.anthropic.com only | **yes**, in memory |
 | `server.py` | the above | binds `127.0.0.1` only | none |
+
+While it runs, `server.py` also probes the rate-limit endpoint on its own every five
+minutes, so the daily buckets keep filling with the page closed. It goes through the
+same cache and back-off as the page does, so that is the ceiling either way: one
+probe per five minutes, never more, and the 429 back-off applies to both. Samples
+are kept for 90 days in `~/.usemeup/usage.db`, a few megabytes at most.
 
 Two files reach the network and no others. `pricing.py` does a plain GET of a
 public price list; nothing about you is sent, no token, no identifiers, no query
@@ -174,6 +211,33 @@ discover later.
 
 Without it, the panel tells you the token expired and that `claude -p ok` fixes it.
 (`claude auth status` does **not** refresh it; it only reads local state.)
+
+---
+
+## Keeping it running (macOS)
+
+The daily view is only as complete as the hours the server was up to sample. A
+Terminal window you close at night is a gap in tomorrow's chart. So on macOS:
+
+```
+usemeup agent install
+```
+
+writes a LaunchAgent (`~/Library/LaunchAgents/com.wiltonblake.usemeup.plist`) that
+starts the dashboard at login, restarts it if it exits, and keeps it serving with no
+window open. It runs exactly what you would type, from the same Python and the same
+install you ran the command from, so a source checkout has to stay where it is. Logs
+go to `~/.usemeup/agent.log`; `usemeup agent status` shows whether it is loaded and
+listening, and `usemeup agent uninstall` removes it.
+
+The agent turns **auto-refresh on** by default, because an unattended meter that
+goes stale every 8 to 12 hours defeats the purpose; pass `--no-auto-refresh` to keep
+the read-only behaviour. The first time it runs, macOS may ask whether Python may
+use the Claude Code credential in the Keychain. That prompt is the Keychain's, not
+this tool's, and it appears once.
+
+`ps` will show `python3 -m usemeup.cli serve --no-open` owned by launchd. It binds
+`127.0.0.1` like every other run; the agent changes when it runs, not what it does.
 
 ---
 

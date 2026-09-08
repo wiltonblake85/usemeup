@@ -140,6 +140,8 @@ def banner():
         lines.append("DEMO MODE: project and session names are redacted. Numbers are real.")
     if not COWORK_ROOT:
         lines.append("note: no Cowork transcript folder found; showing Claude Code CLI only.")
+    lines.append("sampling rate limits every 5 min while running, so the daily view "
+                 "keeps filling with the page closed.")
     lines.append("auto-refresh: %s" % ("ON (will run `claude -p ok` when the token expires)"
                                        if AUTO_REFRESH else
                                        "off (set USEMEUP_AUTO_REFRESH=1 to enable)"))
