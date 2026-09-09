@@ -36,12 +36,20 @@ on every day and tell you nothing about counting. Prices come from the LiteLLM
 feed, whose first-party Anthropic rows were cross-checked against Anthropic's
 published pricing page; run `usemeup prices` to see the table and its source.
 
-Shared with the tool: transcript paths, timezone, the exclusion rule, and the
-price table. Independent: reading, deduplication, bucketing and aggregation.
+Shared with the tool: transcript paths, timezone, the exclusion rule, the
+placeholder-message rule, and the price table. Independent: reading,
+deduplication, bucketing and aggregation.
 
 Sharing the exclusion rule matters: this tool can make its own throwaway calls to
 refresh an expired token, and when the recount and the index disagreed about
-whether to count those, verify.py reported a mismatch that was not real.
+whether to count those, verify.py reported a mismatch that was not real. The rule
+is an exact match on the refresh project folder (config.excluded), applied to
+both transcript roots here and in store.py alike.
+
+One definition to know when checking a single day by hand: a call is dated by
+the timestamp of its largest recorded copy. For a streamed response that is the
+final chunk, so a call that starts at 11:59 PM and finishes at 12:01 AM belongs
+to the second day, in the index and in this recount both.
 """
 import argparse
 import datetime
@@ -102,6 +110,8 @@ def recount():
                         u = m.get("usage")
                         if not isinstance(u, dict) or not d.get("timestamp"):
                             continue
+                        if config.synthetic(m.get("model")):
+                            continue      # placeholder, not an API call (same rule as store.py)
                         inp = u.get("input_tokens") or 0
                         out = u.get("output_tokens") or 0
                         cr = u.get("cache_read_input_tokens") or 0

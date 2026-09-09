@@ -19,6 +19,7 @@ Environment variables:
 import datetime
 import hashlib
 import os
+import re
 import sys
 
 APP = "usemeup"
@@ -98,17 +99,50 @@ def local_day(ts):
 
 # ---------------------------------------------------------------- exclusions
 # This tool can make its own throwaway Claude calls to refresh an expired token
-# (see rate_limits.refresh_via_claude_code). Those land in the normal transcript
-# folders, so they must be excluded from counting or the tool inflates its own
-# numbers. Defined once here because store.py and verify.py must agree exactly:
-# when they disagreed, verify.py reported a false mismatch.
-EXCLUDE_MARKERS = ("usemeup", "aiusage")
+# (see rate_limits.refresh_via_claude_code). Claude Code files those under a
+# project folder named after the working directory they ran in, so they must be
+# excluded from counting or the tool inflates its own numbers.
+#
+# The rule is an EXACT match on that project folder's name, never a substring.
+# An earlier version excluded any path containing "usemeup", which would have
+# silently dropped every Claude Code session run inside a checkout of this repo
+# (~/Developer/usemeup, ~/code/usemeup, ...). That is real work, and it counts.
+#
+# Defined once here because store.py and verify.py must agree exactly: when they
+# disagreed, verify.py reported a false mismatch.
+_REFRESH_DIRS = [REFRESH_CWD, os.path.expanduser("~/.aiusage/refresh")]   # current, legacy
+
+
+def project_slug(path):
+    """The folder name Claude Code gives a working directory under ~/.claude/projects.
+
+    Every character that is not a letter or digit becomes "-", so
+    /Users/you/.usemeup/refresh becomes -Users-you--usemeup-refresh.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(os.path.expanduser(path)))
+
+
+EXCLUDE_SLUGS = tuple(sorted({project_slug(p) for p in _REFRESH_DIRS}))
 
 
 def excluded(path):
-    """True if a transcript path is this tool's own noise rather than your work."""
-    p = (path or "").lower()
-    return any(m in p for m in EXCLUDE_MARKERS)
+    """True if a transcript path is this tool's own noise rather than your work.
+
+    Matches only when a whole path component equals one of EXCLUDE_SLUGS.
+    """
+    parts = os.path.normpath(path or "").split(os.sep)
+    return any(part in EXCLUDE_SLUGS for part in parts)
+
+
+# Claude Code writes placeholder assistant messages with this model name (for
+# example when a request fails before a response arrives). They carry a usage
+# block of all zeros and are not API calls, so they are not counted at all.
+# A counted call always has at least one input or cache token.
+SYNTHETIC_MODELS = ("<synthetic>",)
+
+
+def synthetic(model):
+    return (model or "") in SYNTHETIC_MODELS
 
 
 # ---------------------------------------------------------------- demo mode
@@ -125,7 +159,8 @@ def redact(label, kind="project"):
     """Stable pseudonym for a path-like label. Same input, same output."""
     if not DEMO or not label:
         return label
-    keep = {"Cowork (desktop)", "desktop scratch", "home directory", "cowork", "cli"}
+    keep = {"Cowork (desktop)", "Cowork, local runs", "desktop scratch", "home directory",
+            "cowork", "cli"}
     if label in keep:
         return label
     h = hashlib.sha256(("%s|%s" % (kind, label)).encode()).digest()

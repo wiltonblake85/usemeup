@@ -14,6 +14,9 @@ While the server runs it also samples the rate-limit windows itself, once every
 SAMPLE_EVERY seconds, so the daily view is not blind whenever the page is closed.
 It goes through the same cache, TTL and 429 back-off as the page, so the total
 call rate to api.anthropic.com is unchanged: at most one probe per five minutes.
+The same tick re-scans the transcript folders (unchanged files are skipped, so
+it costs almost nothing), so the index is current the moment the page opens
+rather than however old the last page load was.
 """
 import http.server
 import json
@@ -54,6 +57,8 @@ def _maybe_ingest(force=False):
     with _lock:
         try:
             _cache["ingest"] = store.ingest()
+            if (_cache["ingest"] or {}).get("new_calls"):
+                _cache["usage"] = None      # aggregates are stale; rebuild on next read
         except Exception as e:
             _cache["ingest"] = {"error": "%s: %s" % (type(e).__name__, e)}
         _last_ingest[0] = time.time()
@@ -135,14 +140,20 @@ SAMPLE_EVERY = TTL_LIMITS    # one probe per cache lifetime; never more than the
 
 
 def _sampler():
-    """Keep the sample history filling while the page is closed.
+    """Keep the sample history and the transcript index filling while the page is closed.
 
     _limits() owns every rule about when a probe is allowed (cache TTL, error
     TTL, 429 back-off), so this loop just asks on a timer and lets it decide.
     Failures are already recorded in the cache; nothing to do here but wait.
+    _maybe_ingest() has its own TTL and skips unchanged files, so calling it
+    here keeps the index fresh at no real cost.
     """
     while True:
         time.sleep(SAMPLE_EVERY)
+        try:
+            _maybe_ingest()
+        except Exception:
+            pass
         try:
             _limits()
         except Exception:
@@ -190,11 +201,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     200, json.dumps(payload, default=str, indent=2), "application/json",
                     {"content-disposition": 'attachment; filename="usemeup-export.json"'})
             self._send(404, "not found", "text/plain")
-        except BrokenPipeError:
-            pass
+        except (BrokenPipeError, ConnectionResetError):
+            pass          # the browser went away mid-response; nothing to tell it
         except Exception as e:
-            self._send(500, json.dumps({"error": "%s: %s" % (type(e).__name__, e)}),
-                       "application/json")
+            try:
+                self._send(500, json.dumps({"error": "%s: %s" % (type(e).__name__, e)}),
+                           "application/json")
+            except OSError:
+                pass      # dead socket; the error is already lost on the client side
 
 
 class Server(socketserver.ThreadingTCPServer):

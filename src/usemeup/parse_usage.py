@@ -11,6 +11,7 @@ import json
 import os
 
 from . import config
+from . import coverage
 from . import pricing as pricing_mod
 from . import store
 
@@ -64,7 +65,8 @@ def project_dirs():
         if not os.path.isdir(full):
             continue
         n = len([f for f in os.listdir(full) if f.endswith(".jsonl")])
-        out.append({"slug": d, "name": config.redact(store._pretty_project(d)), "files": n})
+        out.append({"slug": d, "name": config.redact(store._pretty_project(d)), "files": n,
+                    "excluded": config.excluded(full)})
     return out
 
 
@@ -123,6 +125,21 @@ def sessions(limit=25):
     return out[:limit]
 
 
+def limit_by_day(days=120):
+    """Per-calendar-day movement of each weekly rate-limit window, from samples.
+
+    Same day cut as the transcript charts (config.LOCAL_TZ), so the two can sit
+    side by side. Empty when nothing has been sampled yet.
+    """
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=days + 1)).isoformat()
+    try:
+        samples, names = store.all_limit_samples(since)
+    except Exception as e:
+        return {"error": "%s: %s" % (type(e).__name__, e)}
+    return coverage.build(samples, names, config.LOCAL_TZ)
+
+
 def build(block_days=30, day_limit=120):
     prices = _pricing()
     db = store.connect()
@@ -154,6 +171,12 @@ def build(block_days=30, day_limit=120):
             _add(bucket.setdefault(key, _blank()), row, cost)
         _add(by_day_model.setdefault(r["day"], {}).setdefault(r["model"], _blank()), row, cost)
         _add(by_day_source.setdefault(r["day"], {}).setdefault(r["source"], _blank()), row, cost)
+
+    # When each model first and last appeared. The UI keys its colours to this,
+    # so a model keeps one colour across every range instead of changing with
+    # its cost rank.
+    model_span = {r["model"]: {"first": r["a"], "last": r["b"]} for r in db.execute(
+        "SELECT model, MIN(day) a, MAX(day) b FROM calls GROUP BY model")}
 
     since = (datetime.datetime.now(datetime.timezone.utc)
              - datetime.timedelta(days=block_days)).isoformat()
@@ -190,12 +213,15 @@ def build(block_days=30, day_limit=120):
         "by_source": by_source,
         "by_day_model": {d: v for d, v in by_day_model.items() if d in keep},
         "by_day_source": {d: v for d, v in by_day_source.items() if d in keep},
+        "model_span": model_span,
+        "limit_by_day": limit_by_day(day_limit),
         "sessions": sessions(),
         "unpriced_models": sorted(unpriced),
         "blocks": [{"start": b["start"].isoformat(), "end": b["end"].isoformat(),
                     "tokens": b["tokens"], "calls": b["calls"], "cost": round(b["cost"], 4)}
                    for b in blocks[-60:]],
         "project_dirs": project_dirs(),
+        "excluded_slugs": list(config.EXCLUDE_SLUGS),
         "record_count": span["n"] or 0,
         "day_count": len(by_day),
         "first_day": span["a"], "last_day": span["b"],

@@ -8,7 +8,7 @@ Reads (read-only, never writes to either):
 Writes: ~/.usemeup/usage.db  (its own database, nothing else)
 Network: none.  Credentials: none.
 
-Two things here are easy to get wrong and both were real bugs:
+Three things here are easy to get wrong and all were real bugs:
 
 1. Deduplication. A streamed response is written many times as it grows, and a
    resumed session replays compacted copies. The identity is
@@ -16,9 +16,23 @@ Two things here are easy to get wrong and both were real bugs:
    total, not the first one written, or you record a partial with
    output_tokens=1 in place of the finished 56,354.
 
+   A consequence worth knowing: the timestamp travels with the copy that wins,
+   so a call is dated by when its final chunk was written, which for a streamed
+   response is completion, not start. A response that starts at 11:59 PM and
+   finishes at 12:01 AM lands on the second day. verify.py applies the same
+   rule, so the two agree; the rule is stated here so nobody hunts for the
+   "missing" call at the day boundary.
+
 2. Day bucketing. Days are cut in the user's own timezone. Bucketing by the UTC
    date moves roughly 10% of calls onto the wrong day for a US user.
+
+3. Exclusions. The tool's own token-refresh pings are excluded by an exact match
+   on their project folder, never by substring (config.excluded). A substring
+   match on "usemeup" would drop every Claude Code session run inside a checkout
+   of this repo. The same rule is applied to both roots, and verify.py applies
+   the identical rule, so a recount never disagrees over what was skipped.
 """
+import datetime
 import json
 import os
 import sqlite3
@@ -30,7 +44,10 @@ CLI_ROOT = config.CLI_ROOT
 COWORK_ROOT = config.COWORK_ROOT
 DB_PATH = config.DB_PATH
 
-SCHEMA_VERSION = "3"
+# 3 -> 4: placeholder "<synthetic>" messages are no longer indexed (they carry no
+# tokens and are not API calls), and the exclusion rule became an exact match.
+# Either change alters what is counted, so the index rebuilds once.
+SCHEMA_VERSION = "4"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files (
@@ -70,9 +87,10 @@ def connect():
     if not ver or ver["v"] != SCHEMA_VERSION:
         # Semantics or columns changed: drop and rebuild (~15s). CREATE TABLE
         # IF NOT EXISTS will not alter an existing table, so DELETE is not enough.
-        # Note: limit_samples is deliberately NOT dropped. Those are timestamped
-        # observations of the account's rate-limit state that cannot be recovered
-        # by re-reading transcripts, so a schema rebuild must not discard them.
+        # Note: limit_samples and the window names in meta are deliberately NOT
+        # dropped. Those are timestamped observations of the account's rate-limit
+        # state that cannot be recovered by re-reading transcripts, so a schema
+        # rebuild must not discard them.
         db.execute("DROP TABLE IF EXISTS calls")
         db.execute("DROP TABLE IF EXISTS files")
         db.executescript(SCHEMA)
@@ -113,25 +131,26 @@ def _identify(path):
 
 def _walk():
     """Yield (path, source) for every transcript worth reading."""
-    if os.path.isdir(CLI_ROOT):
-        for dirpath, _dn, filenames in os.walk(CLI_ROOT):
+    roots = [(CLI_ROOT, "cli")]
+    if COWORK_ROOT:
+        roots.append((COWORK_ROOT, "cowork"))
+    for root, source in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dn, filenames in os.walk(root):
             # Skip the throwaway sessions this tool makes to refresh the token.
+            # Same rule for both roots; verify.py applies the identical one.
             if config.excluded(dirpath):
                 continue
             for fn in filenames:
-                if fn.endswith(".jsonl"):
-                    yield os.path.join(dirpath, fn), "cli"
-    if COWORK_ROOT and os.path.isdir(COWORK_ROOT):
-        for dirpath, _dn, filenames in os.walk(COWORK_ROOT):
-            for fn in filenames:
                 # audit.jsonl is an event log, not a transcript; it has no usage.
                 if fn.endswith(".jsonl") and fn != "audit.jsonl":
-                    yield os.path.join(dirpath, fn), "cowork"
+                    yield os.path.join(dirpath, fn), source
 
 
 def _records(path, source):
     session, slug, is_sub = _identify(path)
-    project = "Cowork (desktop)" if source == "cowork" else _pretty_project(slug)
+    project = "Cowork, local runs" if source == "cowork" else _pretty_project(slug)
     label = _pretty_project(slug)
     try:
         fh = open(path, errors="replace")
@@ -151,9 +170,12 @@ def _records(path, source):
             u = m.get("usage")
             if not isinstance(u, dict) or not d.get("timestamp"):
                 continue
+            model = m.get("model") or "unknown"
+            if config.synthetic(model):
+                continue          # a placeholder, not an API call
             rid, mid = d.get("requestId"), m.get("id")
             key = ("%s|%s" % (rid or "", mid or "")) if (rid or mid) else \
-                  ("ts:%s|%s|%s" % (d["timestamp"], m.get("model"), u.get("output_tokens")))
+                  ("ts:%s|%s|%s" % (d["timestamp"], model, u.get("output_tokens")))
             cc = u.get("cache_creation") or {}
             std = u.get("output_tokens_details") or {}
             stu = u.get("server_tool_use") or {}
@@ -162,7 +184,7 @@ def _records(path, source):
             cr = u.get("cache_read_input_tokens") or 0
             cw = u.get("cache_creation_input_tokens") or 0
             yield (key, d["timestamp"], config.local_day(d["timestamp"]),
-                   m.get("model") or "unknown", source, project,
+                   model, source, project,
                    session, label, is_sub,
                    inp, out, std.get("thinking_tokens") or 0,
                    cr, cw,
@@ -191,21 +213,27 @@ def record_limit_sample(windows):
     A single utilization reading only supports an average-pace guess. Keeping a
     short history lets the projection use the recent slope instead, which is what
     you actually want when a quiet week ends in a heavy session.
+
+    The window's display name (e.g. "7-day window, Fable only") is kept in meta
+    alongside, because the samples carry only the key and the name is what the
+    day chart needs to say which model a window is scoped to.
     """
     if not windows:
         return 0
-    import datetime as _dt
-    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     rows = [(now, w.get("key"), float(w.get("used_pct") or 0), w.get("resets_at"))
             for w in windows if w.get("key") is not None]
     if not rows:
         return 0
     db = connect()
     db.executemany("INSERT OR REPLACE INTO limit_samples VALUES (?,?,?,?)", rows)
+    db.executemany("INSERT OR REPLACE INTO meta VALUES (?, ?)",
+                   [("window_name:%s" % w["key"], str(w.get("name") or w["key"]))
+                    for w in windows if w.get("key") is not None])
     # The daily view keeps the current week plus four prior ones (daily.WEEKS_KEPT),
     # so anything past 90 days is unreachable. Three keys at one row per five
     # minutes is under 80k rows for the whole retention, a few megabytes at most.
-    cutoff = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=90)).isoformat()
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=90)).isoformat()
     db.execute("DELETE FROM limit_samples WHERE ts < ?", (cutoff,))
     db.commit()
     db.close()
@@ -219,6 +247,20 @@ def limit_samples(key, since_iso):
         " WHERE key=? AND ts>=? ORDER BY ts", (key, since_iso))]
     db.close()
     return rows
+
+
+def all_limit_samples(since_iso):
+    """{key: [{ts, used_pct, resets_at}, ...]} for every window, plus their names."""
+    db = connect()
+    out = {}
+    for r in db.execute("SELECT ts, key, used_pct, resets_at FROM limit_samples"
+                        " WHERE ts>=? ORDER BY ts", (since_iso,)):
+        out.setdefault(r["key"], []).append(
+            {"ts": r["ts"], "used_pct": r["used_pct"], "resets_at": r["resets_at"]})
+    names = {r["k"][len("window_name:"):]: r["v"] for r in db.execute(
+        "SELECT k, v FROM meta WHERE k LIKE 'window_name:%'")}
+    db.close()
+    return out, names
 
 
 def ingest(progress=None):

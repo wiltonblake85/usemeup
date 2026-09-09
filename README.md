@@ -72,9 +72,23 @@ had already survived a round of "I checked the code and it looks right":
 3. **The recount and the index disagreed about what to exclude.** The tool can make
    its own throwaway calls to refresh a token, and only one of the two was ignoring
    them. Fixed by defining the rule once, in `config.py`, and having both read it.
+4. **The exclusion rule was a substring.** It skipped any path containing
+   `usemeup`, which would have silently dropped every Claude Code session run inside
+   a checkout of this repo. Found in an audit before it bit anyone; the rule is now
+   an exact match on the refresh folder's name, applied to both transcript roots.
 
 The first two were found by recounting, not by reading code. That is the entire
 argument for shipping the recount.
+
+Two definitions worth knowing when you check a single day by hand:
+
+- A call is dated by the timestamp of its largest recorded copy. For a streamed
+  response that is the final chunk, so a call that starts at 11:59 PM and finishes
+  at 12:01 AM belongs to the second day, in the index and in the recount alike.
+- Claude Code writes placeholder assistant messages with the model name
+  `<synthetic>` (a request that failed before a response arrived, for instance).
+  They carry a usage block of zeros and are not API calls, so neither side counts
+  them.
 
 ---
 
@@ -126,9 +140,20 @@ straight-line extrapolation and is labelled as one.
 session that spawned them. This is usually the fastest way to find where the money
 went.
 
-**Spend by day, model, project and source**, with the day chart's model colouring
-following the visible date range so a model you adopted last week leads the chart
-immediately instead of hiding behind months of older usage.
+**Spend by day, model, project and source.** One colour per model, fixed: Opus is
+persimmon, Fable is green, Sonnet is blue, Haiku is purple, and within a family the
+newest generation is drawn at full strength with each earlier one a step paler.
+A model keeps its colour across the 7d/30d/90d ranges and from one day to the
+next, so you can learn the chart once.
+
+**What this Mac cannot see, on the face of the chart.** The spend charts are built
+from transcripts on this machine. Cloud sessions write nothing here (see below), so
+a day of cloud work is an empty bar. The account-wide rate-limit windows, sampled
+every five minutes while the server runs, know better: each day's tooltip shows how
+far each weekly window moved that day, and a ring above a bar marks a day where a
+window scoped to a model climbed while the local index holds no calls for that
+model. That ring is the difference between "nothing happened Tuesday" and "Tuesday
+happened somewhere else".
 
 ---
 
@@ -139,13 +164,23 @@ immediately instead of hiding behind months of older usage.
 | Claude Code CLI | `~/.claude/projects/**/*.jsonl` |
 | Cowork desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/**/*.jsonl` |
 
-Cowork is typically far the larger of the two. It is stored per session rather than
-per project, so it appears as one bar in the project chart.
+The Cowork root holds only what the desktop app executed **on this machine**. It is
+stored per session rather than per project, so it appears as one bar in the project
+chart, labelled "Cowork, local runs". If you mostly work in cloud sessions, that bar
+is largely your local scheduled tasks, and the label is chosen so it does not read as
+"all of Cowork".
 
-**Cloud sessions are in neither.** They run on Anthropic's servers and write nothing
-to your machine. They are counted in the rate-limit meters, which are account-wide,
-and cannot appear in the charts, which are built from local files. That gap is real
-and the UI says so rather than quietly implying the charts are the whole picture.
+**Cloud sessions are in neither.** Cowork in the cloud, Claude Code on the web and
+cloud scheduled tasks run on Anthropic's servers and write nothing to your machine.
+They are counted in the rate-limit meters, which are account-wide, and cannot appear
+in the charts, which are built from local files. That gap is real, and the day chart
+marks it per day (see above) rather than quietly implying the bars are the whole
+picture.
+
+The two halves of the page also cut days differently, by design: the allotment
+view cuts at the weekly reset hour so seven bars sum to the weekly figure; the spend
+charts cut at midnight in your zone because that is what a calendar day means. Each
+chart says which it uses.
 
 The Cowork path is macOS-specific. On Linux and Windows the tool looks in the
 platform equivalents and, finding nothing, says so at startup and shows CLI data
@@ -163,6 +198,7 @@ only rather than reporting a silently partial total.
 | `pricing.py` | the cache, the bundled table | **raw.githubusercontent.com** (public file, GET) | none |
 | `burn.py` | recorded samples | none | none |
 | `daily.py` | recorded samples | none | none |
+| `coverage.py` | recorded samples | none | none |
 | `agent.py` | writes `~/Library/LaunchAgents/…usemeup.plist`, runs `launchctl` | none | none |
 | `verify.py` | your transcripts, the index | none | none |
 | `rate_limits.py` | macOS Keychain, or `~/.claude/.credentials.json` | api.anthropic.com only | **yes**, in memory |
@@ -215,6 +251,8 @@ Without it, the panel tells you the token expired and that `claude -p ok` fixes 
 ---
 
 ## Keeping it running (macOS)
+
+While it runs, the server also re-scans the transcript folders on the same five-minute tick (unchanged files are skipped), so the charts are current the moment the page opens.
 
 The daily view is only as complete as the hours the server was up to sample. A
 Terminal window you close at night is a gap in tomorrow's chart. So on macOS:
