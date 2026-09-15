@@ -26,3 +26,6 @@ pricing-cache.json
 build/
 dist/
 *.egg-info/
+
+# macapp build output
+macapp/build/
