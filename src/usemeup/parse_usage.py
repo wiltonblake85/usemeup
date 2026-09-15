@@ -140,6 +140,126 @@ def limit_by_day(days=120):
     return coverage.build(samples, names, config.LOCAL_TZ)
 
 
+def api_hours(max_gap_s=900.0):
+    """Account-wide activity by local hour, from the rate-limit samples.
+
+    The transcript index is blind to cloud sessions, which is where most of the
+    real work now runs. The rate-limit sampler is not: it reads an account-wide
+    number every five minutes. The rise between two consecutive samples of the
+    same window is consumption that happened in that interval, wherever it ran.
+
+    Only the all-models weekly window is used, and only pairs of samples that
+    sit inside the same window (a reset drops used_pct back to zero) and no
+    more than max_gap_s apart (a longer gap means the server was down and the
+    movement cannot be placed in an hour). Returns None when the history is too
+    thin to say anything.
+    """
+    try:
+        samples, _names = store.all_limit_samples("0000")
+    except Exception as e:
+        return {"error": "%s: %s" % (type(e).__name__, e)}
+    v = samples.get("weekly_all") or samples.get("weekly_scoped") or []
+    if len(v) < 2:
+        return None
+
+    def parse(x):
+        try:
+            t = datetime.datetime.fromisoformat(str(x).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        return t.replace(tzinfo=datetime.timezone.utc) if t.tzinfo is None else t
+
+    hour = [0.0] * 24
+    moved = intervals = 0
+    covered = 0.0
+    first = last = None
+    prev = None
+    for r in v:
+        t, ra, u = parse(r.get("ts")), parse(r.get("resets_at")), r.get("used_pct")
+        if t is None or u is None:
+            continue
+        if first is None:
+            first = t
+        last = t
+        if prev:
+            pt, pu, pra = prev
+            gap = (t - pt).total_seconds()
+            # resets_at carries sub-second jitter on every reading, so the two
+            # samples are in the same window when it agrees to the minute.
+            same = pra is not None and ra is not None and abs((ra - pra).total_seconds()) < 120
+            if same and 0 < gap <= max_gap_s:
+                covered += gap
+                intervals += 1
+                d = u - pu
+                if d > 0:
+                    hour[t.astimezone(config.LOCAL_TZ).hour] += d
+                    moved += 1
+        prev = (t, u, ra)
+
+    total = sum(hour)
+    span_s = (last - first).total_seconds() if first and last else 0.0
+    return {"hour": [round(x, 3) for x in hour],
+            "movement_pct": round(total, 1),
+            "intervals": intervals, "moving_intervals": moved,
+            "coverage_pct": round(covered / span_s * 100, 1) if span_s else 0.0,
+            "days": round(span_s / 86400.0, 1),
+            "first": first.isoformat() if first else None,
+            "last": last.isoformat() if last else None}
+
+
+def by_hour(db, prices, days=None):
+    """Cost-weighted share of activity by local hour of day and weekday.
+
+    The burn-up chart's working-day pace needs to know when this machine is
+    actually in use. An hour with no history in it is an hour the pace model
+    should not be spending any of the allowance in. Cost is the weight, so an
+    hour you touch lightly counts for less than the hour you grind in; call
+    count is the fallback for a stretch where nothing could be priced.
+
+    days=None, the default, reads the whole index: more history means more
+    samples behind every weekday and a rhythm that one unusual week cannot
+    move. Pass a number to restrict the window. The returned "days" is the
+    span actually covered, not what was asked for.
+    """
+    since = (None if days is None else
+             (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=days)).isoformat())
+    cost = [0.0] * 24
+    calls = [0] * 24
+    # Monday-first, so dow[0] is Monday. The client converts from JS getDay().
+    dow = [[0.0] * 24 for _ in range(7)]
+    cols = ("SELECT ts, model, input, output, cache_read, cache_5m, cache_1h"
+            " FROM calls")
+    rows = db.execute(cols + " WHERE ts >= ?", (since,)) if since else db.execute(cols)
+    first = last = None
+    for r in rows:
+        try:
+            t = datetime.datetime.fromisoformat(str(r["ts"]).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=datetime.timezone.utc)
+        if first is None or t < first:
+            first = t
+        if last is None or t > last:
+            last = t
+        lt = t.astimezone(config.LOCAL_TZ)
+        h = lt.hour
+        calls[h] += 1
+        c = _cost({"input": r["input"], "output": r["output"], "cache_read": r["cache_read"],
+                   "cache_5m": r["cache_5m"], "cache_1h": r["cache_1h"]},
+                  _price_for(r["model"] or "", prices))
+        if c:
+            cost[h] += c
+            dow[lt.weekday()][h] += c
+    span = max(1, round((last - first).total_seconds() / 86400)) if first and last else 0
+    return {"days": span, "requested_days": days,
+            "first": first.isoformat() if first else None,
+            "last": last.isoformat() if last else None,
+            "cost": [round(x, 4) for x in cost], "calls": calls,
+            "dow_cost": [[round(x, 4) for x in row] for row in dow]}
+
+
 def build(block_days=30, day_limit=120):
     prices = _pricing()
     db = store.connect()
@@ -197,6 +317,9 @@ def build(block_days=30, day_limit=120):
         if c:
             cur["cost"] += c
 
+    hourly = by_hour(db, prices)
+    hourly["api"] = api_hours()
+
     span = db.execute("SELECT MIN(day) a, MAX(day) b, COUNT(*) n FROM calls").fetchone()
     db.close()
 
@@ -214,6 +337,7 @@ def build(block_days=30, day_limit=120):
         "by_day_model": {d: v for d, v in by_day_model.items() if d in keep},
         "by_day_source": {d: v for d, v in by_day_source.items() if d in keep},
         "model_span": model_span,
+        "by_hour": hourly,
         "limit_by_day": limit_by_day(day_limit),
         "sessions": sessions(),
         "unpriced_models": sorted(unpriced),

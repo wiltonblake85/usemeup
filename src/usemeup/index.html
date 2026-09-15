@@ -25,7 +25,7 @@
 
   --s1:#DB5F00; --s2:#3A7BE0; --s3:#6E37B6; --s4:#2E9E7E; --s5:#B01B57; --s6:#5C6B8A;
   /* measured is persimmon; the bar goes ink-black as it gets serious */
-  --good:#DB5F00; --warning:#B84F00; --serious:#1A1816; --critical:#1A1816;
+  --good:#1E9E6A; --warning:#E29D00; --serious:#D65B00; --critical:#1F5FD0;
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
@@ -33,7 +33,7 @@
     --surface-0:#231F1C; --surface-1:#1A1816; --tint:#231F1C; --line:#3A3531; --rule:#FAF6EF;
     --text-primary:#FAF6EF; --text-secondary:#C6BFB4; --text-muted:#8A847C;
     --s1:#CE6F26; --s2:#4A8FE0; --s3:#A86BFD; --s4:#32A88E; --s5:#B0416B; --s6:#8A9BC0;
-    --good:#E87524; --warning:#C25400; --serious:#FAF6EF; --critical:#FAF6EF;
+    --good:#22AE84; --warning:#E8B02C; --serious:#E4591A; --critical:#4A8FE8;
   }
 }
 :root[data-theme="dark"]{
@@ -41,7 +41,7 @@
   --surface-0:#231F1C; --surface-1:#1A1816; --tint:#231F1C; --line:#3A3531; --rule:#FAF6EF;
   --text-primary:#FAF6EF; --text-secondary:#C6BFB4; --text-muted:#8A847C;
   --s1:#CE6F26; --s2:#4A8FE0; --s3:#A86BFD; --s4:#32A88E; --s5:#B0416B; --s6:#8A9BC0;
-  --good:#E87524; --warning:#C25400; --serious:#FAF6EF; --critical:#FAF6EF;
+  --good:#22AE84; --warning:#E8B02C; --serious:#E4591A; --critical:#4A8FE8;
 }
 
 *{box-sizing:border-box}
@@ -169,8 +169,10 @@ th.r,td.r{text-align:right;padding-right:0}
   <p class="sub" id="sub">reading local session files…</p>
 
   <div class="card">
-    <div class="kicker">Live from api.anthropic.com · account-wide</div>
-    <h2>Rate limit windows</h2>
+    <header style="margin-bottom:14px">
+      <div><div class="kicker">Live from api.anthropic.com · account-wide</div><h2 style="margin:0">Rate limit windows</h2></div>
+      <span id="pace-ctl"></span>
+    </header>
     <div id="meters"><p style="color:var(--text-muted);font-size:12.5px;margin:0">checking…</p></div>
   </div>
 
@@ -299,6 +301,208 @@ const hideTip = () => tip.style.opacity = 0;
 
 const STATE = {usage: null, limits: null};
 
+// ---------- pace basis: the wall clock, or the days you actually work ----------
+// The even-pace diagonal treats a week as 168 equal hours. It is not. Nothing is
+// spent while the machine is asleep, so eight quiet hours overnight read as
+// "under pace" when they are just night, and the projection extrapolates a
+// daytime burn rate straight through them. WORKDAY re-bases every pace number on
+// the hours this Mac is actually used, read out of the local index: the busiest
+// N hours of the day carry the whole budget and the rest carry none.
+const PACE = {mode: "clock", hoursPerDay: 10};
+try { const raw = localStorage.getItem("usemeup.pace");
+  if (raw) Object.assign(PACE, JSON.parse(raw)); } catch (e) {}
+const savePace = () => { try {
+  localStorage.setItem("usemeup.pace", JSON.stringify(PACE)); } catch (e) {} };
+
+const hr12 = h => (h % 12 === 0 ? 12 : h % 12) + (h < 12 || h === 24 ? " AM" : " PM");
+// "9 AM-8 PM", or "8 PM-2 AM, 9 AM-1 PM" when the working day is split.
+function hourRanges(hs) {
+  if (!hs.length) return "";
+  const runs = []; let start = hs[0], prev = hs[0];
+  for (const h of hs.slice(1)) {
+    if (h === prev + 1) { prev = h; continue; }
+    runs.push([start, prev]); start = prev = h;
+  }
+  runs.push([start, prev]);
+  if (runs.length > 1 && runs[0][0] === 0 && runs[runs.length - 1][1] === 23) {
+    const first = runs.shift();               // a run across midnight reads as one
+    runs[runs.length - 1][1] = first[1] + 24;
+  }
+  return runs.map(([a, b]) => `${hr12(a % 24)}–${hr12((b + 1) % 24)}`).join(", ");
+}
+
+// Per-hour weights on a 7x24 grid (Monday first), mean 1.0 so a full week of
+// them still sums to 168 hours. Two things are learned, not assumed: the shape
+// of each weekday (its busiest N hours carry that day's budget) and the
+// intensity of each weekday relative to the others. Saturday really is lighter
+// than Wednesday, and Sunday really is not a day off.
+//
+// The per-weekday hour shape is blended 60/40 with the all-days shape. Ninety
+// days gives about thirteen samples per weekday, which is thin enough that one
+// heavy Tuesday night would otherwise redraw every future Tuesday.
+const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DOW_BLEND = 0.6;      // weight on the day's own shape
+const DOW_SHRINK = 0.25;    // pull day intensities a quarter of the way to flat
+function dutyWeights() {
+  const bh = STATE.usage && STATE.usage.by_hour;
+  if (!bh) return null;
+  // Hours prefer the rate-limit samples: they are account-wide, so they see the
+  // cloud sessions the transcript index is blind to. Transcripts stay the source
+  // for the weekday split until the sampler has enough weeks to carry that too.
+  const api = bh.api && !bh.api.error ? bh.api : null;
+  const apiOk = !!(api && (api.hour || []).length === 24 && api.hour.some(v => v > 0)
+    && api.movement_pct >= 20 && api.moving_intervals >= 30 && api.days >= 3);
+  const flat = apiOk ? api.hour.slice()
+    : ((bh.cost || []).some(v => v > 0) ? bh.cost : bh.calls || []).slice();
+  if (flat.length !== 24 || !flat.some(v => v > 0)) return null;
+  const grid = bh.dow_cost && bh.dow_cost.length === 7 ? bh.dow_cost : null;
+  const want = Math.max(1, Math.min(24, PACE.hoursPerDay | 0));
+
+  const norm = a => { const t = a.reduce((x, y) => x + y, 0); return t > 0 ? a.map(v => v / t) : null; };
+  const capTop = a => {                      // keep the busiest `want` hours, drop the rest
+    const keep = new Set(a.map((v, i) => [v, i]).sort((p, q) => q[0] - p[0])
+      .slice(0, want).filter(p => p[0] > 0).map(p => p[1]));
+    const out = a.map((v, i) => keep.has(i) ? Math.max(v, 1e-9) : 0);
+    return {shape: norm(out), hours: keep.size};
+  };
+
+  const flatShape = norm(flat);
+  if (!flatShape) return null;
+
+  // Day intensities: each weekday's share of the period's spend, shrunk toward
+  // flat so a quiet stretch cannot zero out a day entirely.
+  let share = new Array(7).fill(1 / 7);
+  if (grid) {
+    const tot = grid.map(r => r.reduce((a, b) => a + b, 0));
+    const sum = tot.reduce((a, b) => a + b, 0);
+    if (sum > 0) share = tot.map(v => (1 - DOW_SHRINK) * (v / sum) + DOW_SHRINK / 7);
+  }
+
+  const w = [], perDayHours = [];
+  for (let d = 0; d < 7; d++) {
+    const own = grid ? norm(grid[d].slice()) : null;
+    const mixed = own
+      ? flatShape.map((v, h) => DOW_BLEND * own[h] + (1 - DOW_BLEND) * v)
+      : flatShape.slice();
+    const {shape, hours} = capTop(mixed);
+    if (!shape) return null;
+    perDayHours.push(hours);
+    w.push(shape.map(v => v * share[d] * 7 * 24));   // grid mean is 1.0/hour
+  }
+
+  const order = [...share.keys()].sort((a, b) => share[b] - share[a]);
+  return {w, days: bh.days || 0, apiHours: apiOk, api: api,
+          hoursPerDay: Math.round(perDayHours.reduce((a, b) => a + b, 0) / 7),
+          byDay: !!grid, heaviest: DOW[order[0]], lightest: DOW[order[6]],
+          label: hourRanges(capTop(flatShape).shape
+            .map((v, i) => [v, i]).filter(p => p[0] > 0).map(p => p[1]).sort((a, b) => a - b))};
+}
+
+// Cumulative share of the window's working time, at 15-minute resolution.
+// 672 steps across a week, which is nothing to walk twice.
+function dutyCurve(t0, t1, w) {
+  const n = Math.max(24, Math.min(2000, Math.round((t1 - t0) / 900000)));
+  const dt = (t1 - t0) / n;
+  const pts = [[t0, 0]];
+  let acc = 0, activeMs = 0;
+  for (let i = 0; i < n; i++) {
+    const a = t0 + dt * i, mid = new Date(a + dt / 2);
+    const v = w[(mid.getDay() + 6) % 7][mid.getHours()];   // JS Sunday=0 -> Monday=0
+    acc += v * dt;
+    if (v > 0) activeMs += dt;
+    pts.push([a + dt, acc]);
+  }
+  const total = acc || 1;
+  for (const q of pts) q[1] /= total;
+  return {pts, activeHours: activeMs / 3600000};
+}
+const dutyAt = (pts, t) => {
+  if (t <= pts[0][0]) return 0;
+  if (t >= pts[pts.length - 1][0]) return 1;
+  let lo = 0, hi = pts.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m][0] <= t) lo = m; else hi = m; }
+  const [ta, va] = pts[lo], [tb, vb] = pts[hi];
+  return va + (vb - va) * (t - ta) / Math.max(1, tb - ta);
+};
+const dutyInv = (pts, v) => {                 // first moment the curve reaches v
+  if (v <= 0) return pts[0][0];
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i][1] >= v) {
+      const [ta, va] = pts[i - 1], [tb, vb] = pts[i];
+      return ta + (tb - ta) * (v - va) / Math.max(1e-9, vb - va);
+    }
+  }
+  return null;                                 // never gets there inside this window
+};
+
+// Everything the chart and the sentence under it need, on whichever basis is
+// selected. {on:false} means draw it the old way.
+function paceBasis(w) {
+  const off = {on: false};
+  if (PACE.mode !== "workday") return off;
+  // Only windows long enough to contain a night are worth re-basing. Inside a
+  // 5-hour window the duty model runs out of working time before the window
+  // closes and reports 100% elapsed with an hour still on the clock, which is
+  // true and useless. Short windows stay on the wall clock.
+  if (!w.window_seconds || w.window_seconds < 36 * 3600) return off;
+  const p = w.projection;
+  if (!p || p.error || !p.window_start || !p.resets_at || !p.now) return off;
+  const weights = dutyWeights();
+  if (!weights) return off;
+  const t0 = new Date(p.window_start).getTime(), t1 = new Date(p.resets_at).getTime();
+  if (!(t1 > t0)) return off;
+
+  const {pts, activeHours} = dutyCurve(t0, t1, weights.w);
+  const now = new Date(p.now).getTime();
+  const dNow = dutyAt(pts, now);
+
+  // Slope measured in working time, not wall time, so an overnight gap in the
+  // samples is not read as a slowdown.
+  let slope = null, basis = "average";
+  const ser = (p.series || []).map(x => [new Date(x.t).getTime(), x.pct])
+    .filter(q => isFinite(q[0]) && isFinite(q[1]) && q[0] >= t0 && q[0] <= now);
+  if (ser.length >= 2) {
+    const a = ser[0], z = ser[ser.length - 1];
+    const span = dutyAt(pts, z[0]) - dutyAt(pts, a[0]);
+    if (span > 0.02 && z[1] >= a[1]) { slope = (z[1] - a[1]) / span; basis = "recent"; }
+  }
+  if (slope === null) slope = dNow > 0.02 ? w.used_pct / dNow : 0;
+
+  const end = Math.max(0, w.used_pct + slope * (1 - dNow));
+  const exhausted = (slope > 0 && end > 100)
+    ? dutyInv(pts, dNow + (100 - w.used_pct) / slope) : null;
+  return {on: true, curve: pts, dNow, slope, end, exhausted, basis, activeHours,
+          ratePerActiveHour: activeHours > 0 ? slope / activeHours : 0,
+          hoursPerDay: weights.hoursPerDay, hoursLabel: weights.label,
+          sampleDays: weights.days, byDay: weights.byDay,
+          heaviest: weights.heaviest, lightest: weights.lightest,
+          apiHours: weights.apiHours, api: weights.api};
+}
+
+function renderPaceCtl() {
+  const el = $("#pace-ctl");
+  if (!el) return;
+  const have = !!dutyWeights();
+  const on = PACE.mode === "workday" && have;
+  const btn = (mode, lab, dis) =>
+    `<button class="btn" data-pace="${mode}"${dis ? " disabled" : ""} style="margin-left:6px;${
+      PACE.mode === mode && (mode === "clock" || have)
+        ? "color:var(--text-primary);border-color:var(--text-muted);" : ""}${
+      dis ? "opacity:.45;cursor:default" : ""}">${lab}</button>`;
+  el.innerHTML = btn("clock", "24h pace", false) + btn("workday", "work day", !have)
+    + (on ? `<select class="btn" id="pace-hours" style="margin-left:6px">`
+        + [6, 8, 10, 12, 14, 16].map(h =>
+            `<option value="${h}"${h === PACE.hoursPerDay ? " selected" : ""}>${h}h/day</option>`).join("")
+        + `</select>` : "");
+  const redraw = () => { savePace(); renderPaceCtl(); if (STATE.limits) renderMeters(STATE.limits); };
+  el.querySelectorAll("[data-pace]").forEach(b => {
+    if (b.disabled) return;
+    b.onclick = () => { PACE.mode = b.dataset.pace; redraw(); };
+  });
+  const sel = $("#pace-hours");
+  if (sel) sel.onchange = () => { PACE.hoursPerDay = +sel.value; redraw(); };
+}
+
 // ---------- rate limit meters ----------
 const sevOf = p => p >= 90 ? "critical" : p >= 75 ? "serious" : p >= 50 ? "warning" : "good";
 
@@ -366,7 +570,9 @@ function dailyChart(w, W) {
   const y = v => PT + ih - ih * Math.max(0, v) / maxV;
   const ink = cssv("--text-primary"), muted = cssv("--text-muted"), line = cssv("--line");
   const track = cssv("--surface-0"), danger = cssv("--critical");
-  const hue = cssv("--" + sevOf(w.used_pct));
+  // Capped at "serious": the measured bar must never land on the same step as
+  // the overspend block drawn on top of it.
+  const hue = cssv("--" + (sevOf(w.used_pct) === "critical" ? "serious" : sevOf(w.used_pct)));
   const pid = "hatch-" + String(w.key || "w").replace(/[^a-z0-9_]/gi, "");
   let g = `<defs><pattern id="${pid}" width="6" height="6" patternUnits="userSpaceOnUse"
       patternTransform="rotate(45)"><rect width="6" height="6" fill="${hue}" opacity=".22"/>
@@ -480,38 +686,81 @@ function dailyLine(w) {
 
 function paceLine(w) {
   if (!w.window_seconds || w.resets_in_seconds == null) return "";
+  const b = paceBasis(w);
   const elapsedDays = (w.window_seconds - w.resets_in_seconds) / 86400;
   const totalDays = w.window_seconds / 86400;
-  const elapsedPct = (w.window_seconds - w.resets_in_seconds) / w.window_seconds * 100;
+  const clockPct = (w.window_seconds - w.resets_in_seconds) / w.window_seconds * 100;
+  const elapsedPct = b.on ? b.dNow * 100 : clockPct;
   const gap = w.used_pct - elapsedPct;
-  const verdict = gap > 15 ? "ahead of pace, on track to run out early"
-    : gap > 5 ? "slightly ahead of pace"
-    : gap < -15 ? "well under pace, most of this window will expire unused"
-    : gap < -5 ? "a little under pace"
-    : "on pace";
-  const tone = gap > 15 ? "--critical" : gap > 5 ? "--warning" : "--text-muted";
+
+  // The verdict splits in two: a short phrase the headline can carry, and the
+  // consequence, which belongs in the line under it rather than in 22px type.
+  const [verdict, tail] = gap > 15 ? ["ahead of pace", "on track to run out early"]
+    : gap > 5 ? ["slightly ahead of pace", ""]
+    : gap < -15 ? ["well under pace", "most of this window will expire unused"]
+    : gap < -5 ? ["a little under pace", ""]
+    : ["on pace", ""];
+  const tone = gap > 15 ? "--critical" : gap > 5 ? "--warning"
+    : gap < -5 ? "--good" : "--text-primary";
+
+  const hit = at => `<strong style="color:var(--critical)">projected to hit 100% around ${
+    esc(new Date(at).toLocaleString([], {weekday: "long", hour: "numeric", minute: "2-digit"}))}</strong>`;
   const p = w.projection;
-  const proj = (p && !p.error)
-    ? ` · burning ${p.rate_pct_per_hour}%/hr, ` + (p.exhausted_at
-        ? `<strong style="color:var(--critical)">projected to hit 100% around ${
-            esc(new Date(p.exhausted_at).toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit"}))}</strong>`
-        : `landing near ${p.projected_end_pct}% at reset`)
-    : "";
+  const bits = [];
+  if (tail) bits.push(tail);
+  if (b.on) {
+    bits.push(`burning ${b.ratePerActiveHour.toFixed(2)}% per working hour`);
+    bits.push(b.exhausted ? hit(b.exhausted) : `landing near ${b.end.toFixed(0)}% at reset`);
+  } else if (p && !p.error) {
+    bits.push(`burning ${p.rate_pct_per_hour}% per hour`);
+    bits.push(p.exhausted_at ? hit(p.exhausted_at) : `landing near ${p.projected_end_pct}% at reset`);
+  }
+
   const daysPart = totalDays >= 2
     ? `day ${Math.floor(elapsedDays) + 1} of ${Math.round(totalDays)} · ` : "";
-  return `<div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">
-    ${daysPart}${elapsedPct.toFixed(0)}% of the window elapsed · ${w.used_pct}% used ·
-    <span style="color:var(${tone})">${verdict}</span>${proj}</div>`;
+  const kicker = `${daysPart}${elapsedPct.toFixed(0)}% of ${
+    b.on ? "your working time" : "the window"} elapsed`;
+  const hoursFrom = b.apiHours
+    ? `hours from ${b.api.days} days of account-wide rate-limit samples (${
+        b.api.coverage_pct}% of that span sampled), so cloud sessions count`
+    : `hours from ${b.sampleDays} days of local transcripts, which cannot see cloud sessions`;
+  const note = b.on
+    ? `working rhythm: the ${b.hoursPerDay} busiest hours of each weekday (typically ${
+        esc(b.hoursLabel)})${
+        b.byDay ? `, each weekday weighted by its own share — heaviest ${
+          esc(b.heaviest)}, lightest ${esc(b.lightest)}` : ""
+        }<br>${hoursFrom} · weekday split from ${b.sampleDays} days of local transcripts · ${
+        clockPct.toFixed(0)}% of the wall clock has passed`
+    : "";
+
+  // This is the sentence the whole panel exists to deliver, so it is set as a
+  // headline: Playfair over a rule, not 11px grey under a chart.
+  return `<div style="margin:18px 0 2px;padding-top:14px;border-top:1px solid var(--line)">
+    <div style="font-family:var(--meta);font-weight:500;font-size:10px;letter-spacing:.16em;
+      text-transform:uppercase;color:var(--text-muted)">${kicker}</div>
+    <div style="font-family:var(--body);font-weight:600;font-size:20px;line-height:1.35;
+      letter-spacing:-.005em;color:var(--text-primary);margin:7px 0 0;font-variant-numeric:tabular-nums">
+      ${w.used_pct}% used, <span style="color:var(${tone})">${verdict}</span></div>
+    ${bits.length ? `<div style="font-size:13px;line-height:1.6;color:var(--text-secondary);margin-top:6px">
+      ${bits.join(" · ")}</div>` : ""}
+    ${note ? `<div style="font-size:11px;line-height:1.6;color:var(--text-muted);margin-top:6px">
+      ${note}</div>` : ""}
+  </div>`;
 }
+
 
 // A burn-up chart: consumption against the clock, over one window.
 //   solid   what you have actually used, from samples
 //   dashed  where the current rate lands you by reset
-//   grey    the even-pace diagonal, 0% at open to 100% at reset
-// Above the diagonal means you are outrunning the window.
+//   grey    the reference pace, 0% at open to 100% at reset
+// Above the reference means you are outrunning the window. On the 24h basis the
+// reference is a straight diagonal; on the working-day basis it is a staircase
+// that is flat overnight, and the projection bends with it instead of running
+// straight through the hours you are asleep.
 function burnChart(w, W) {
   const p = w.projection;
   if (!p || p.error || !p.series || p.series.length < 2) return "";
+  const b = paceBasis(w);
   const H = 150, PL = 40, PR = W < NARROW ? 62 : 96, PT = 12, PB = 24;
   const iw = W - PL - PR, ih = H - PT - PB;
 
@@ -519,14 +768,18 @@ function burnChart(w, W) {
   const t1 = new Date(p.resets_at).getTime();
   const span = Math.max(1, t1 - t0);
   const x = t => PL + iw * Math.max(0, Math.min(1, (t - t0) / span));
+  const projEnd = b.on ? b.end : p.projected_end_pct;
   // Headroom above 100 so an over-cap projection is visible rather than clipped.
-  const yMax = Math.max(100, Math.ceil((p.projected_end_pct + 8) / 25) * 25);
+  const yMax = Math.max(100, Math.ceil((projEnd + 8) / 25) * 25);
   const y = v => PT + ih - ih * Math.max(0, Math.min(yMax, v)) / yMax;
 
   const ink = cssv("--text-primary"), muted = cssv("--text-muted"), line = cssv("--line");
   const st = sevOf(w.used_pct);
   const fill = cssv("--" + st);
   const danger = cssv("--critical");
+  // One point per hour is plenty of resolution for a line 1000px wide.
+  const every = pts => { const step = Math.max(1, Math.round(pts.length / 220));
+    return pts.filter((_, i) => i % step === 0 || i === pts.length - 1); };
 
   let g = "";
   for (const v of [0, 25, 50, 75, 100]) {
@@ -540,10 +793,17 @@ function burnChart(w, W) {
   g += `<line x1="${PL}" y1="${yCap}" x2="${W - PR}" y2="${yCap}" stroke="${danger}"
         stroke-width="1.5" stroke-dasharray="2 3" opacity=".75"/>`;
 
-  // Even-pace reference.
-  g += `<line x1="${x(t0)}" y1="${y(0)}" x2="${x(t1)}" y2="${y(100)}" stroke="${muted}"
-        stroke-width="1" stroke-dasharray="3 4" opacity=".45"/>
-        <text x="${W - PR + 8}" y="${y(100) + 3.5}" font-size="10" fill="${muted}">even pace</text>`;
+  // Reference pace.
+  if (b.on) {
+    const ref = every(b.curve).map(([t, v]) => `${x(t).toFixed(1)},${y(v * 100).toFixed(1)}`).join(" ");
+    g += `<polyline points="${ref}" fill="none" stroke="${muted}" stroke-width="1"
+          stroke-dasharray="3 4" opacity=".55"/>
+          <text x="${W - PR + 8}" y="${y(100) + 3.5}" font-size="10" fill="${muted}">work pace</text>`;
+  } else {
+    g += `<line x1="${x(t0)}" y1="${y(0)}" x2="${x(t1)}" y2="${y(100)}" stroke="${muted}"
+          stroke-width="1" stroke-dasharray="3 4" opacity=".45"/>
+          <text x="${W - PR + 8}" y="${y(100) + 3.5}" font-size="10" fill="${muted}">even pace</text>`;
+  }
 
   // Observed.
   const pts = p.series.map(s => [x(new Date(s.t).getTime()), y(s.pct)]);
@@ -555,18 +815,28 @@ function burnChart(w, W) {
 
   // Projection from now to reset.
   const nowT = new Date(p.now).getTime();
-  const overCap = p.projected_end_pct > 100;
-  g += `<path d="M${x(nowT).toFixed(1)},${y(p.used_pct).toFixed(1)} L${x(t1).toFixed(1)},${y(p.projected_end_pct).toFixed(1)}"
-        fill="none" stroke="${overCap ? danger : fill}" stroke-width="2" stroke-dasharray="5 4" opacity=".85"/>
-        <circle cx="${x(nowT).toFixed(1)}" cy="${y(p.used_pct).toFixed(1)}" r="3.5" fill="${fill}"/>
-        <circle cx="${x(t1).toFixed(1)}" cy="${y(p.projected_end_pct).toFixed(1)}" r="3"
+  const overCap = projEnd > 100;
+  let projPath;
+  if (b.on) {
+    const fwd = every(b.curve.filter(q => q[0] >= nowT))
+      .map(([t, v]) => [x(t), y(w.used_pct + b.slope * (v - b.dNow))]);
+    fwd.unshift([x(nowT), y(w.used_pct)]);
+    projPath = fwd.map((q2, i) => `${i ? "L" : "M"}${q2[0].toFixed(1)},${q2[1].toFixed(1)}`).join(" ");
+  } else {
+    projPath = `M${x(nowT).toFixed(1)},${y(p.used_pct).toFixed(1)} L${x(t1).toFixed(1)},${y(projEnd).toFixed(1)}`;
+  }
+  g += `<path d="${projPath}" fill="none" stroke="${overCap ? danger : fill}" stroke-width="2"
+        stroke-dasharray="5 4" opacity=".85" stroke-linejoin="round"/>
+        <circle cx="${x(nowT).toFixed(1)}" cy="${y(w.used_pct).toFixed(1)}" r="3.5" fill="${fill}"/>
+        <circle cx="${x(t1).toFixed(1)}" cy="${y(projEnd).toFixed(1)}" r="3"
                 fill="none" stroke="${overCap ? danger : fill}" stroke-width="1.5"/>
-        <text x="${W - PR + 8}" y="${y(p.projected_end_pct) + 3.5}" font-size="10.5"
-              fill="${overCap ? danger : ink}" font-weight="600">${p.projected_end_pct}%</text>`;
+        <text x="${W - PR + 8}" y="${y(projEnd) + 3.5}" font-size="10.5"
+              fill="${overCap ? danger : ink}" font-weight="600">${projEnd.toFixed(projEnd >= 10 ? 0 : 1)}%</text>`;
 
   // Where the projection crosses the cap.
-  if (p.exhausted_at) {
-    const xe = x(new Date(p.exhausted_at).getTime());
+  const hitAt = b.on ? b.exhausted : (p.exhausted_at ? new Date(p.exhausted_at).getTime() : null);
+  if (hitAt) {
+    const xe = x(hitAt);
     g += `<line x1="${xe}" y1="${PT}" x2="${xe}" y2="${PT + ih}" stroke="${danger}" stroke-width="1.5"/>
           <circle cx="${xe}" cy="${yCap}" r="3.5" fill="${danger}"/>`;
   }
@@ -586,7 +856,8 @@ function burnChart(w, W) {
         <text x="${W - PR}" y="${H - 8}" text-anchor="end" font-size="10" fill="${muted}">${esc(fmt(p.resets_at))}</text>`;
 
   return `<svg viewBox="0 0 ${W} ${H}" style="margin-top:10px" role="img"
-    aria-label="Burn-up chart for ${esc(w.name)}: ${w.used_pct}% used, projected to reach ${p.projected_end_pct}% by reset">${g}</svg>`;
+    aria-label="Burn-up chart for ${esc(w.name)}: ${w.used_pct}% used, projected to reach ${
+      projEnd.toFixed(0)}% by reset on the ${b.on ? "working-day" : "24-hour"} basis">${g}</svg>`;
 }
 
 function projectionLine(w) {
@@ -643,8 +914,14 @@ function renderMeters(d) {
       <br><br>Percentages below are from that earlier check and are no longer live. Countdowns are current.</div>` : "";
 
   const W = widthOf("#meters");
-  el.innerHTML = staleBanner + d.windows.map(w => {
+  // Longest window first. The weekly windows are the ones with consequences;
+  // the 5-hour session window resets before you finish reading about it.
+  const ordered = d.windows.slice().sort((a, b) => (b.window_seconds || 0) - (a.window_seconds || 0));
+  el.innerHTML = staleBanner + ordered.map(w => {
     const p = w.used_pct, st = sevOf(p);
+    // Measured bars are capped at "serious" so they never match the overspend
+    // block drawn on top of them; the legend has to agree with the bars.
+    const barSt = st === "critical" ? "serious" : st;
     const icon = { good: "●", warning: "▲", serious: "▲", critical: "■" }[st];
     const flags = [];
     if (w.binding) flags.push("binding window");
@@ -652,15 +929,18 @@ function renderMeters(d) {
     if (d.stale) flags.push("stale");
     const hasDaily = !!(w.daily && w.daily.weeks && w.daily.weeks.some(x => x.current));
     const legend = hasDaily ? `<div class="legend" style="margin:2px 0 6px;font-size:11.5px">
-        <span><i class="sw" style="background:var(--${st})"></i>measured</span>
-        <span><i class="sw" style="background:repeating-linear-gradient(45deg,var(--${st}) 0 2px,transparent 2px 5px);border:1px solid var(--${st})"></i>not sampled, spread evenly</span>
+        <span><i class="sw" style="background:var(--${barSt})"></i>measured</span>
+        <span><i class="sw" style="background:repeating-linear-gradient(45deg,var(--${barSt}) 0 2px,transparent 2px 5px);border:1px solid var(--${barSt})"></i>not sampled, spread evenly</span>
         <span><i class="sw" style="background:var(--critical)"></i>over the daily share</span>
-        <span><i class="sw" style="border-top:2px dashed var(--text-primary);height:0;border-radius:0"></i>available today</span></div>` : "";
+        <span><i class="sw" style="width:16px;height:2px;border-radius:0;background:repeating-linear-gradient(90deg,var(--text-primary) 0 2px,transparent 2px 4px)"></i>available today</span></div>` : "";
     const body = (w.segments
       ? (hasDaily ? legend + dailyChart(w, W) + dailyLine(w) : dayTrack(w, W)) + paceLine(w)
       : `<div class="track"><div class="fill" style="width:${Math.max(p, p > 0 ? 0.6 : 0)}%;background:var(--${st})"></div></div>`)
       + projectionLine(w) + burnChart(w, W);
-    return `<div class="meter" style="${d.stale ? "opacity:.72" : ""}">
+    // A rule down the left edge in the window's own status colour, so the three
+    // blocks are told apart at a glance and the colour says which one is biting.
+    return `<div class="meter" style="${d.stale ? "opacity:.72;" : ""}border-left:2px solid var(--${
+      st});padding-left:20px;padding-top:30px;padding-bottom:36px">
       <div class="row">
         <span class="nm"><span class="dot" style="background:var(--${st})"></span>${esc(w.name)}
           <span style="color:var(--text-muted);font-weight:400">${icon} ${p}% used</span>
@@ -1001,7 +1281,7 @@ async function load() {
     $("#sub").textContent = `${u.record_count.toLocaleString()} API calls across ${u.day_count} active days`
       + (u.first_day ? ` · ${u.first_day} to ${u.last_day}` : "")
       + " · from transcripts on this Mac only (local Cowork runs + Claude Code CLI); cloud sessions show in the meters, not the charts";
-    renderTiles(u); renderCharts(u); renderTables(u);
+    renderTiles(u); renderCharts(u); renderTables(u); renderPaceCtl();
     const un = u.unpriced_models.filter(m => m !== "<synthetic>");
     $("#demo-banner").innerHTML = u.demo
       ? `<div class="note" style="border-left-color:var(--good);margin-bottom:14px">
