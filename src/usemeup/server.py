@@ -7,6 +7,7 @@ Binds 127.0.0.1, so nothing outside this machine can reach it.
   GET /             index.html
   GET /api/usage    aggregates from the local index (no network)
   GET /api/limits   live rate-limit state (reads Keychain, calls api.anthropic.com)
+  GET /api/panel    the two weekly burn-up charts, pace already applied
   GET /api/ingest   force a re-scan of the transcript folders
   GET /api/export   everything as one JSON download
 
@@ -32,6 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from . import burn
 from . import config
 from . import daily
+from . import panel
 from . import parse_usage
 from . import rate_limits
 from . import store
@@ -191,6 +193,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(200, json.dumps(_usage(), default=str), "application/json")
             if path == "/api/limits":
                 return self._send(200, json.dumps(_limits(), default=str), "application/json")
+            if path == "/api/panel":
+                # Both halves come from the cache _limits() and _usage() already
+                # own, so a client polling this adds no api.anthropic.com traffic
+                # and no extra ingest, however often it asks.
+                return self._send(200, json.dumps(panel.build(_usage(), _limits()), default=str),
+                                  "application/json")
             if path == "/api/ingest":
                 _cache["usage"] = None
                 return self._send(200, json.dumps(_maybe_ingest(force=True)), "application/json")

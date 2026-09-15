@@ -1,0 +1,429 @@
+"""Panel payload: the two weekly burn-up charts, already re-based.
+
+The dashboard's pace model lived in index.html as JavaScript, which is fine
+while the dashboard is the only reader. It stopped being fine the moment a
+second surface (the Transom notch panel) wanted the same two charts: a model
+that exists twice drifts, and this one is still being tuned.
+
+So the model lives here now, in Python, and `/api/panel` serves it already
+computed. A client draws three polylines and prints two strings. Nothing about
+the pace basis, the weekday weighting or the projection is a client's business.
+
+This is a PORT of `dutyWeights` / `dutyCurve` / `paceBasis` / `paceLine` from
+index.html, kept deliberately line-for-line comparable so the two can be diffed
+by eye until the page is switched over to read from here too.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+# The working day, in hours. The dashboard lets this be picked in the UI; the
+# panel has no UI, so it takes the value Wekesa settled on.
+HOURS_PER_DAY = 10
+
+DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+DOW_BLEND = 0.6      # weight on the day's own hour shape, rest from all days
+DOW_SHRINK = 0.25    # pull weekday intensities a quarter of the way to flat
+
+# Windows shorter than this stay on the wall clock. Inside a 5-hour window the
+# duty model runs out of working time before the window closes and reports
+# 100% elapsed with an hour still on the clock, which is true and useless.
+MIN_WORKDAY_WINDOW = 36 * 3600
+
+# Two weekly windows, in the order the panel stacks them.
+PANEL_KEYS = ("weekly_all", "weekly_scoped")
+PANEL_LABELS = {"weekly_all": "All models", "weekly_scoped": "Fable"}
+
+# How many points each polyline is reduced to. A 400pt-wide chart cannot show
+# more, and the payload crosses a socket on every panel open.
+MAX_POINTS = 64
+
+
+# ---------------------------------------------------------------- helpers
+
+def _parse(ts: Optional[str]) -> Optional[float]:
+    """ISO 8601 (with Z or offset) to epoch seconds."""
+    if not ts:
+        return None
+    try:
+        s = ts.replace("Z", "+00:00")
+        d = _dt.datetime.fromisoformat(s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=_dt.timezone.utc)
+        return d.timestamp()
+    except Exception:
+        return None
+
+
+def _norm(a: Sequence[float]) -> Optional[List[float]]:
+    t = float(sum(a))
+    return [v / t for v in a] if t > 0 else None
+
+
+def _cap_top(a: Sequence[float], want: int) -> Tuple[Optional[List[float]], int]:
+    """Keep the busiest `want` hours, zero the rest, renormalise."""
+    ranked = sorted(((v, i) for i, v in enumerate(a)), key=lambda p: -p[0])
+    keep = {i for v, i in ranked[:want] if v > 0}
+    out = [max(v, 1e-9) if i in keep else 0.0 for i, v in enumerate(a)]
+    return _norm(out), len(keep)
+
+
+def _hr12(h: int) -> str:
+    return "%d %s" % (12 if h % 12 == 0 else h % 12, "AM" if (h < 12 or h == 24) else "PM")
+
+
+def _hour_ranges(hours: Sequence[int]) -> str:
+    """'9 AM-8 PM', or '8 PM-2 AM, 9 AM-1 PM' when the working day is split."""
+    hs = list(hours)
+    if not hs:
+        return ""
+    runs: List[List[int]] = []
+    start = prev = hs[0]
+    for h in hs[1:]:
+        if h == prev + 1:
+            prev = h
+            continue
+        runs.append([start, prev])
+        start = prev = h
+    runs.append([start, prev])
+    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == 23:
+        first = runs.pop(0)          # a run across midnight reads as one
+        runs[-1][1] = first[1] + 24
+    return ", ".join("%s–%s" % (_hr12(a % 24), _hr12((b + 1) % 24)) for a, b in runs)
+
+
+def _thin(pts: Sequence[Sequence[float]], cap: int = MAX_POINTS) -> List[List[float]]:
+    """Even decimation that always keeps the first and last point."""
+    n = len(pts)
+    if n <= cap:
+        return [[round(p[0], 3), round(p[1], 4)] for p in pts]
+    step = (n - 1) / float(cap - 1)
+    idx = sorted({int(round(i * step)) for i in range(cap)} | {0, n - 1})
+    return [[round(pts[i][0], 3), round(pts[i][1], 4)] for i in idx]
+
+
+# ---------------------------------------------------------------- duty model
+
+def duty_weights(by_hour: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Per-hour weights on a 7x24 grid (Monday first), mean 1.0 per hour.
+
+    Two things are learned, not assumed: the shape of each weekday (its busiest
+    N hours carry that day's budget) and the intensity of each weekday relative
+    to the others. Saturday really is lighter than Wednesday, and Sunday really
+    is not a day off.
+    """
+    if not by_hour:
+        return None
+    api = by_hour.get("api") if isinstance(by_hour.get("api"), dict) else None
+    if api and api.get("error"):
+        api = None
+    # Hours prefer the rate-limit samples: they are account-wide, so they see
+    # the cloud sessions the transcript index is blind to. Transcripts stay the
+    # source for the weekday split until the sampler has enough weeks for it.
+    api_ok = bool(
+        api
+        and len(api.get("hour") or []) == 24
+        and any(v > 0 for v in api["hour"])
+        and (api.get("movement_pct") or 0) >= 20
+        and (api.get("moving_intervals") or 0) >= 30
+        and (api.get("days") or 0) >= 3
+    )
+    if api_ok:
+        flat = list(api["hour"])
+    else:
+        cost = by_hour.get("cost") or []
+        flat = list(cost) if any(v > 0 for v in cost) else list(by_hour.get("calls") or [])
+    if len(flat) != 24 or not any(v > 0 for v in flat):
+        return None
+
+    grid = by_hour.get("dow_cost")
+    grid = grid if (isinstance(grid, list) and len(grid) == 7) else None
+    want = max(1, min(24, int(HOURS_PER_DAY)))
+
+    flat_shape = _norm(flat)
+    if not flat_shape:
+        return None
+
+    share = [1 / 7.0] * 7
+    if grid:
+        tot = [float(sum(r)) for r in grid]
+        s = sum(tot)
+        if s > 0:
+            share = [(1 - DOW_SHRINK) * (v / s) + DOW_SHRINK / 7 for v in tot]
+
+    w: List[List[float]] = []
+    per_day_hours: List[int] = []
+    for d in range(7):
+        own = _norm(list(grid[d])) if grid else None
+        mixed = ([DOW_BLEND * own[h] + (1 - DOW_BLEND) * flat_shape[h] for h in range(24)]
+                 if own else list(flat_shape))
+        shape, hours = _cap_top(mixed, want)
+        if not shape:
+            return None
+        per_day_hours.append(hours)
+        w.append([v * share[d] * 7 * 24 for v in shape])   # grid mean is 1.0/hour
+
+    order = sorted(range(7), key=lambda i: -share[i])
+    lab_shape, _ = _cap_top(flat_shape, want)
+    label = _hour_ranges(sorted(i for i, v in enumerate(lab_shape or []) if v > 0))
+    return {
+        "w": w,
+        "days": by_hour.get("days") or 0,
+        "api_hours": api_ok,
+        "api": api if api_ok else None,
+        "hours_per_day": int(round(sum(per_day_hours) / 7.0)),
+        "by_day": bool(grid),
+        "heaviest": DOW[order[0]],
+        "lightest": DOW[order[6]],
+        "label": label,
+    }
+
+
+def duty_curve(t0: float, t1: float, w: List[List[float]]) -> Tuple[List[List[float]], float]:
+    """Cumulative share of the window's working time, at 15-minute resolution."""
+    n = max(24, min(2000, int(round((t1 - t0) / 900.0))))
+    dt = (t1 - t0) / n
+    pts: List[List[float]] = [[t0, 0.0]]
+    acc = 0.0
+    active = 0.0
+    for i in range(n):
+        a = t0 + dt * i
+        mid = _dt.datetime.fromtimestamp(a + dt / 2)      # local time, as the JS does
+        v = w[mid.weekday()][mid.hour]                    # Python weekday() is already Monday=0
+        acc += v * dt
+        if v > 0:
+            active += dt
+        pts.append([a + dt, acc])
+    total = acc or 1.0
+    for q in pts:
+        q[1] /= total
+    return pts, active / 3600.0
+
+
+def duty_at(pts: List[List[float]], t: float) -> float:
+    if t <= pts[0][0]:
+        return 0.0
+    if t >= pts[-1][0]:
+        return 1.0
+    lo, hi = 0, len(pts) - 1
+    while hi - lo > 1:
+        m = (lo + hi) // 2
+        if pts[m][0] <= t:
+            lo = m
+        else:
+            hi = m
+    ta, va = pts[lo]
+    tb, vb = pts[hi]
+    return va + (vb - va) * (t - ta) / max(1e-9, tb - ta)
+
+
+def duty_inv(pts: List[List[float]], v: float) -> Optional[float]:
+    """First moment the curve reaches v, or None if it never does in-window."""
+    if v <= 0:
+        return pts[0][0]
+    for i in range(1, len(pts)):
+        if pts[i][1] >= v:
+            ta, va = pts[i - 1]
+            tb, vb = pts[i]
+            return ta + (tb - ta) * (v - va) / max(1e-9, vb - va)
+    return None
+
+
+# ---------------------------------------------------------------- pace basis
+
+def pace_basis(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """{'on': False} means the caller should fall back to the wall clock."""
+    off = {"on": False}
+    if not weights:
+        return off
+    if not win.get("window_seconds") or win["window_seconds"] < MIN_WORKDAY_WINDOW:
+        return off
+    p = win.get("projection") or {}
+    if p.get("error") or not p.get("window_start") or not p.get("resets_at") or not p.get("now"):
+        return off
+    t0, t1, now = _parse(p["window_start"]), _parse(p["resets_at"]), _parse(p["now"])
+    if t0 is None or t1 is None or now is None or not (t1 > t0):
+        return off
+
+    pts, active_hours = duty_curve(t0, t1, weights["w"])
+    d_now = duty_at(pts, now)
+    used = float(win.get("used_pct") or 0)
+
+    # Slope measured in working time, not wall time, so an overnight gap in the
+    # samples is not read as a slowdown.
+    slope = None
+    basis = "average"
+    ser = []
+    for s in (p.get("series") or []):
+        t = _parse(s.get("t"))
+        pct = s.get("pct")
+        if t is not None and pct is not None and t0 <= t <= now:
+            ser.append((t, float(pct)))
+    if len(ser) >= 2:
+        a, z = ser[0], ser[-1]
+        span = duty_at(pts, z[0]) - duty_at(pts, a[0])
+        if span > 0.02 and z[1] >= a[1]:
+            slope = (z[1] - a[1]) / span
+            basis = "recent"
+    if slope is None:
+        slope = (used / d_now) if d_now > 0.02 else 0.0
+
+    end = max(0.0, used + slope * (1 - d_now))
+    exhausted = duty_inv(pts, d_now + (100 - used) / slope) if (slope > 0 and end > 100) else None
+    return {
+        "on": True, "curve": pts, "d_now": d_now, "slope": slope, "end": end,
+        "exhausted": exhausted, "basis": basis, "active_hours": active_hours,
+        "rate_per_active_hour": (slope / active_hours) if active_hours > 0 else 0.0,
+        "t0": t0, "t1": t1, "now": now, "used": used,
+    }
+
+
+def chart_state(pct: float, gap: float) -> str:
+    """Two states, and only two. The panel answers one question at a glance:
+    is this fine, or is it not.
+
+    NOT the dashboard's four-step `sevOf`. A four-colour ramp keyed to how full
+    a window is says "75% full" when the thing worth knowing is whether that
+    75% arrived early. An 81% window tracking dead on its pace needs no colour
+    at all; the same 81% two days ahead of the clock does.
+
+    Alert when the burn is running ahead of the pace (gap over 5 points, the
+    same threshold that turns the verdict from "on pace" to "slightly ahead"),
+    or when the window is simply spent. Everything else is fine.
+    """
+    if pct >= 100:
+        return "alert"
+    return "alert" if gap > 5 else "ok"
+
+
+def verdict_for(gap: float) -> Tuple[str, str, str]:
+    """(verdict, consequence, tone). The consequence belongs under the headline,
+    not inside it."""
+    if gap > 15:
+        return "ahead of pace", "on track to run out early", "critical"
+    if gap > 5:
+        return "slightly ahead of pace", "", "warning"
+    if gap < -15:
+        return "well under pace", "most of this window will expire unused", "good"
+    if gap < -5:
+        return "a little under pace", "", "good"
+    return "on pace", "", "neutral"
+
+
+# ---------------------------------------------------------------- payload
+
+def _fmt_reset(epoch: Optional[float]) -> Optional[str]:
+    if epoch is None:
+        return None
+    d = _dt.datetime.fromtimestamp(epoch)
+    hour = d.strftime("%-I:%M %p") if hasattr(d, "strftime") else ""
+    return "%s %s" % (d.strftime("%A"), hour)
+
+
+def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    p = win.get("projection") or {}
+    series = p.get("series") or []
+    if p.get("error") or len(series) < 2:
+        return None
+    b = pace_basis(win, weights)
+    used = float(win.get("used_pct") or 0)
+    ws, ris = win.get("window_seconds"), win.get("resets_in_seconds")
+    if not ws or ris is None:
+        return None
+
+    clock_pct = (ws - ris) / ws * 100.0
+    elapsed_pct = (b["d_now"] * 100.0) if b["on"] else clock_pct
+    gap = used - elapsed_pct
+    verdict, consequence, tone = verdict_for(gap)
+
+    t0 = _parse(p.get("window_start"))
+    t1 = _parse(p.get("resets_at"))
+    now = _parse(p.get("now"))
+    if t0 is None or t1 is None or now is None:
+        return None
+
+    proj_end = b["end"] if b["on"] else float(p.get("projected_end_pct") or used)
+    # Headroom above 100 so an over-cap projection is visible rather than clipped.
+    y_max = max(100.0, (int((proj_end + 8) / 25) + 1) * 25.0) if proj_end + 8 > 100 else 100.0
+
+    observed = [[_parse(s["t"]), float(s["pct"])] for s in series if _parse(s.get("t")) is not None]
+
+    if b["on"]:
+        reference = [[t, v * 100.0] for t, v in b["curve"]]
+        fwd = [[t, used + b["slope"] * (v - b["d_now"])] for t, v in b["curve"] if t >= now]
+        fwd.insert(0, [now, used])
+        projection = fwd
+        exhausted = b["exhausted"]
+    else:
+        reference = [[t0, 0.0], [t1, 100.0]]
+        projection = [[now, used], [t1, proj_end]]
+        exhausted = _parse(p.get("exhausted_at"))
+
+    elapsed_days = (ws - ris) / 86400.0
+    total_days = ws / 86400.0
+    kicker = "%s%.0f%% of %s elapsed" % (
+        ("day %d of %d · " % (int(elapsed_days) + 1, round(total_days))) if total_days >= 2 else "",
+        elapsed_pct,
+        "your working time" if b["on"] else "the window",
+    )
+
+    bits: List[str] = []
+    if consequence:
+        bits.append(consequence)
+    if b["on"]:
+        bits.append("burning %.2f%% per working hour" % b["rate_per_active_hour"])
+        bits.append(("projected to hit 100%% around %s" % _fmt_reset(exhausted)) if exhausted
+                    else "landing near %.0f%% at reset" % b["end"])
+    else:
+        bits.append("burning %s%% per hour" % p.get("rate_pct_per_hour"))
+        bits.append(("projected to hit 100%% around %s" % _fmt_reset(exhausted)) if exhausted
+                    else "landing near %s%% at reset" % p.get("projected_end_pct"))
+
+    return {
+        "key": win.get("key"),
+        "label": PANEL_LABELS.get(win.get("key"), win.get("name") or win.get("key")),
+        "used_pct": used,
+        "verdict": verdict,
+        "tone": tone,
+        "state": chart_state(used, gap),
+        "kicker": kicker,
+        "detail": " · ".join(bits),
+        "basis": "workday" if b["on"] else "clock",
+        "t0": round(t0, 3),
+        "t1": round(t1, 3),
+        "now": round(now, 3),
+        "y_max": y_max,
+        "over_cap": proj_end > 100,
+        "resets_at": win.get("resets_at"),
+        "reference": _thin(reference),
+        "observed": _thin(observed),
+        "projection": _thin(projection),
+    }
+
+
+def build(usage: Dict[str, Any], limits: Dict[str, Any]) -> Dict[str, Any]:
+    """The whole panel payload. Both inputs come from the server's own cache,
+    so this adds no network call and no extra ingest."""
+    if not limits or not limits.get("ok"):
+        return {"ok": False, "error": (limits or {}).get("error") or "no rate-limit data",
+                "windows": []}
+    weights = duty_weights((usage or {}).get("by_hour"))
+    by_key = {w.get("key"): w for w in (limits.get("windows") or [])}
+    out = []
+    for key in PANEL_KEYS:
+        w = by_key.get(key)
+        if not w:
+            continue
+        built = build_window(w, weights)
+        if built:
+            out.append(built)
+    return {
+        "ok": bool(out),
+        "checked_at": limits.get("checked_at"),
+        "hours_per_day": (weights or {}).get("hours_per_day"),
+        "hours_label": (weights or {}).get("label"),
+        "sample_days": (weights or {}).get("days"),
+        "windows": out,
+    }
