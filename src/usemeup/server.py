@@ -199,6 +199,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # and no extra ingest, however often it asks.
                 return self._send(200, json.dumps(panel.build(_usage(), _limits()), default=str),
                                   "application/json")
+            if path == "/api/menubar":
+                # Same model as /api/panel, minus the plotted series. A menu
+                # bar polls on a timer forever, so it gets its own shape
+                # rather than pulling 9 KB of chart points every minute.
+                return self._send(200, json.dumps(panel.menubar(_usage(), _limits()), default=str),
+                                  "application/json")
             if path == "/api/ingest":
                 _cache["usage"] = None
                 return self._send(200, json.dumps(_maybe_ingest(force=True)), "application/json")

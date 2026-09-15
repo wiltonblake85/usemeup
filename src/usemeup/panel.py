@@ -336,7 +336,14 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
     clock_pct = (ws - ris) / ws * 100.0
     elapsed_pct = (b["d_now"] * 100.0) if b["on"] else clock_pct
     gap = used - elapsed_pct
-    verdict, consequence, tone = verdict_for(gap)
+    if used >= 100:
+        # Pace is a claim about the future and a spent window has none. At 100%
+        # used with 98% elapsed the gap is ~2, so verdict_for says "on pace",
+        # which is arithmetically true and reads as reassurance to someone who
+        # is, in fact, out. chart_state already carves out 100; so does this.
+        verdict, consequence, tone = "spent", "", "critical"
+    else:
+        verdict, consequence, tone = verdict_for(gap)
 
     t0 = _parse(p.get("window_start"))
     t1 = _parse(p.get("resets_at"))
@@ -369,20 +376,33 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
         "your working time" if b["on"] else "the window",
     )
 
+    # The headline is where this window ENDS UP, because that is the question
+    # being asked: will I get cut off before I am done. "a little under pace"
+    # describes the slope and makes the reader do the last step themselves.
+    # The slope stays, demoted to supporting evidence under the outcome.
+    if used >= 100:
+        headline = "nothing left until reset"
+    elif exhausted:
+        headline = "runs out around %s" % _fmt_reset(exhausted)
+    elif b["on"]:
+        headline = "landing near %.0f%% at reset" % b["end"]
+    else:
+        headline = "landing near %s%% at reset" % p.get("projected_end_pct")
+
     bits: List[str] = []
     if consequence:
         bits.append(consequence)
-    if b["on"]:
+    if used >= 100:
+        # No burn rate: it describes a future this window does not have.
+        pass
+    elif b["on"]:
         bits.append("burning %.2f%% per working hour" % b["rate_per_active_hour"])
-        bits.append(("projected to hit 100%% around %s" % _fmt_reset(exhausted)) if exhausted
-                    else "landing near %.0f%% at reset" % b["end"])
     else:
         bits.append("burning %s%% per hour" % p.get("rate_pct_per_hour"))
-        bits.append(("projected to hit 100%% around %s" % _fmt_reset(exhausted)) if exhausted
-                    else "landing near %s%% at reset" % p.get("projected_end_pct"))
 
     return {
         "key": win.get("key"),
+        "headline": headline,
         "label": PANEL_LABELS.get(win.get("key"), win.get("name") or win.get("key")),
         "used_pct": used,
         "verdict": verdict,
@@ -403,16 +423,21 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
     }
 
 
-def build(usage: Dict[str, Any], limits: Dict[str, Any]) -> Dict[str, Any]:
+def build(usage: Dict[str, Any], limits: Dict[str, Any],
+          keys: Sequence[str] = PANEL_KEYS) -> Dict[str, Any]:
     """The whole panel payload. Both inputs come from the server's own cache,
-    so this adds no network call and no extra ingest."""
+    so this adds no network call and no extra ingest.
+
+    `keys` picks which windows and in what order. It defaults to the two the
+    notch panel stacks; the menu bar passes MENUBAR_KEYS to get the 5-hour
+    window as well."""
     if not limits or not limits.get("ok"):
         return {"ok": False, "error": (limits or {}).get("error") or "no rate-limit data",
                 "windows": []}
     weights = duty_weights((usage or {}).get("by_hour"))
     by_key = {w.get("key"): w for w in (limits.get("windows") or [])}
     out = []
-    for key in PANEL_KEYS:
+    for key in keys:
         w = by_key.get(key)
         if not w:
             continue
@@ -426,4 +451,67 @@ def build(usage: Dict[str, Any], limits: Dict[str, Any]) -> Dict[str, Any]:
         "hours_label": (weights or {}).get("label"),
         "sample_days": (weights or {}).get("days"),
         "windows": out,
+    }
+
+
+# ---------------------------------------------------------------- menu bar
+
+# The menu bar shows the 5-hour window too. The panel leaves it out because two
+# stacked charts is all a notch has room for; a dropdown has room, and the 5h
+# window is the one that actually interrupts an afternoon. build_window already
+# knows to keep windows under MIN_WORKDAY_WINDOW on the wall clock, so nothing
+# else has to change to include it.
+MENUBAR_KEYS = ("session", "weekly_all", "weekly_scoped")
+
+# Everything build_window returns except the three plotted series.
+MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "verdict", "tone",
+                  "state", "kicker", "detail", "basis", "resets_at", "over_cap")
+
+
+def _resets_in(ts: Optional[str]) -> Optional[int]:
+    """Seconds from now until `ts`, floored at zero. The bar counts down between
+    polls rather than asking again every second."""
+    t = _parse(ts)
+    if t is None:
+        return None
+    return max(0, int(t - _dt.datetime.now(_dt.timezone.utc).timestamp()))
+
+
+def _severity(w: Dict[str, Any]) -> Tuple[int, float]:
+    """How much a window deserves the bar's attention.
+
+    Ordered the way chart_state thinks: a window in alert outranks one that is
+    merely filling up, and among equals the fuller wins. The rule lives here so
+    the icon's colour and the panel's colours can never disagree about which
+    window is the problem.
+    """
+    return (1 if w.get("state") == "alert" else 0, float(w.get("used_pct") or 0.0))
+
+
+def menubar(usage: Dict[str, Any], limits: Dict[str, Any]) -> Dict[str, Any]:
+    """The panel payload with the chart series dropped and a worst-window pick.
+
+    A menu bar item polls this on a timer and needs two strings and a number,
+    not 149 plotted points: without reference/observed/projection the response
+    falls from roughly 9 KB to under 1 KB. `worst` is resolved here so a client
+    that pins one window to the bar can still colour the icon by the window that
+    is actually in trouble.
+    """
+    full = build(usage, limits, keys=MENUBAR_KEYS)
+    if not full.get("ok"):
+        return {"ok": False, "error": full.get("error"), "windows": [], "worst": None}
+    wins = []
+    for w in full.get("windows") or []:
+        c = {k: w[k] for k in MENUBAR_FIELDS if k in w}
+        c["resets_in"] = _resets_in(w.get("resets_at"))
+        wins.append(c)
+    worst = max(wins, key=_severity) if wins else None
+    return {
+        "ok": True,
+        "checked_at": full.get("checked_at"),
+        "hours_per_day": full.get("hours_per_day"),
+        "hours_label": full.get("hours_label"),
+        "sample_days": full.get("sample_days"),
+        "worst": (worst or {}).get("key"),
+        "windows": wins,
     }
