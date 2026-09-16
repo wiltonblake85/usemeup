@@ -12,6 +12,7 @@ import os
 
 from . import config
 from . import coverage
+from . import history
 from . import pricing as pricing_mod
 from . import store
 
@@ -149,10 +150,10 @@ def api_hours(max_gap_s=900.0):
     same window is consumption that happened in that interval, wherever it ran.
 
     Only the all-models weekly window is used, and only pairs of samples that
-    sit inside the same window (a reset drops used_pct back to zero) and no
-    more than max_gap_s apart (a longer gap means the server was down and the
-    movement cannot be placed in an hour). Returns None when the history is too
-    thin to say anything.
+    sit inside the same window (a reset drops used_pct back to zero, and
+    history.same_window decides) and no more than max_gap_s apart (a longer gap
+    means the server was down and the movement cannot be placed in an hour).
+    Returns None when the history is too thin to say anything.
     """
     try:
         samples, _names = store.all_limit_samples("0000")
@@ -184,9 +185,7 @@ def api_hours(max_gap_s=900.0):
         if prev:
             pt, pu, pra = prev
             gap = (t - pt).total_seconds()
-            # resets_at carries sub-second jitter on every reading, so the two
-            # samples are in the same window when it agrees to the minute.
-            same = pra is not None and ra is not None and abs((ra - pra).total_seconds()) < 120
+            same = history.same_window(pra, ra)
             if same and 0 < gap <= max_gap_s:
                 covered += gap
                 intervals += 1

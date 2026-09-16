@@ -60,6 +60,26 @@ def window_id(resets_at):
     return int(round(t.timestamp() / WINDOW_BUCKET_S))
 
 
+# Two consecutive readings are inside the same window when their reset
+# timestamps agree to well within a window length. Sub-second jitter passes;
+# the nearest real boundary is the 5-hour window, 18,000s away.
+SAME_WINDOW_TOLERANCE_S = 120
+
+
+def same_window(a, b):
+    """Are these two reset timestamps the same window?
+
+    Deliberately a tolerance and not window_id(). Bucketing is right for sorting
+    many samples into groups, but for comparing two readings it can split a pair
+    that straddles a bucket edge, which a tolerance never does. Two jobs, two
+    primitives, one module so they cannot drift apart.
+    """
+    ta, tb = _parse(a), _parse(b)
+    if ta is None or tb is None:
+        return False
+    return abs((ta - tb).total_seconds()) < SAME_WINDOW_TOLERANCE_S
+
+
 def windows(samples):
     """Group one key's samples into real windows.
 

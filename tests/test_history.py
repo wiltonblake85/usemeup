@@ -78,3 +78,23 @@ def test_capped_windows_are_counted_so_the_floor_is_visible():
     samples = [_s(h, min(100.0, h), R1) for h in range(0, 145, 12)]
     t = history.typical_full_window(samples, 7 * 86400)
     assert t["capped_windows"] == 1
+
+
+def test_same_window_accepts_midnight_jitter():
+    """The pair that looks like two windows and is one: the reset timestamp
+    wobbles across midnight between consecutive readings."""
+    assert history.same_window("2026-09-15T23:59:59.703204+00:00",
+                               "2026-09-16T00:00:00.188574+00:00")
+
+
+def test_same_window_rejects_genuinely_adjacent_windows():
+    """The nearest real boundary is the 5-hour window. Nothing in the tolerance
+    comes close to it."""
+    assert not history.same_window("2026-09-16T08:30:00+00:00",
+                                   "2026-09-16T13:30:00+00:00")
+    assert not history.same_window(R1, R2)
+
+
+def test_same_window_is_false_on_missing_values():
+    assert not history.same_window(None, R1)
+    assert not history.same_window(R1, "not a timestamp")
