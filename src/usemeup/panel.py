@@ -233,8 +233,43 @@ def duty_inv(pts: List[List[float]], v: float) -> Optional[float]:
 
 # ---------------------------------------------------------------- pace basis
 
-def pace_basis(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """{'on': False} means the caller should fall back to the wall clock."""
+# How much of a window's working time must be on the clock before its own
+# slope means anything, and how much before it can stand alone. Between the two
+# the window's evidence and the account's history are blended in proportion.
+SLOPE_MIN_SPAN = 0.05    # ~3.5 working hours of a 70-hour week
+SLOPE_FULL_SPAN = 0.25   # ~1.75 working days
+
+
+def blend_slope(observed: Optional[float], prior_end: Optional[float],
+                span: float) -> Tuple[Optional[float], str]:
+    """Pick a slope from the window's own evidence, the account's history, or both.
+
+    `observed` is points per unit duty measured inside this window, or None when
+    there is too little of the window to measure. `prior_end` is what a full
+    window of this kind usually consumes. `span` is how much duty the
+    observation covers, which is the only thing that decides how far to trust it.
+
+    Returns (slope, basis) where basis is one of observed, blend, history, none.
+    `none` means say so; it must never be turned into a number downstream.
+    """
+    if observed is not None and prior_end is not None:
+        conf = (span - SLOPE_MIN_SPAN) / (SLOPE_FULL_SPAN - SLOPE_MIN_SPAN)
+        conf = min(1.0, max(0.0, conf))
+        return conf * observed + (1.0 - conf) * prior_end, ("observed" if conf >= 1.0 else "blend")
+    if observed is not None:
+        return observed, "observed"
+    if prior_end is not None:
+        return prior_end, "history"
+    return None, "none"
+
+
+def pace_basis(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
+               prior: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """{'on': False} means the caller should fall back to the wall clock.
+
+    `prior` is history.typical_full_window() for this key: what a complete
+    window usually consumes, in the same units as slope. It carries the
+    projection while the window is too young to speak for itself."""
     off = {"on": False}
     if not weights:
         return off
@@ -253,49 +288,77 @@ def pace_basis(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Dict[s
 
     # Slope measured in working time, not wall time, so an overnight gap in the
     # samples is not read as a slowdown.
-    slope = None
-    basis = "average"
     ser = []
     for s in (p.get("series") or []):
         t = _parse(s.get("t"))
         pct = s.get("pct")
         if t is not None and pct is not None and t0 <= t <= now:
             ser.append((t, float(pct)))
+
+    observed, span = None, 0.0
     if len(ser) >= 2:
         a, z = ser[0], ser[-1]
         span = duty_at(pts, z[0]) - duty_at(pts, a[0])
-        if span > 0.02 and z[1] >= a[1]:
-            slope = (z[1] - a[1]) / span
-            basis = "recent"
-    if slope is None:
-        slope = (used / d_now) if d_now > 0.02 else 0.0
+        if span > SLOPE_MIN_SPAN and z[1] >= a[1]:
+            observed = (z[1] - a[1]) / span
 
-    end = max(0.0, used + slope * (1 - d_now))
-    exhausted = duty_inv(pts, d_now + (100 - used) / slope) if (slope > 0 and end > 100) else None
+    # An earlier version divided by whatever span it had and, when that was too
+    # thin to trust, fell back to a slope of zero. Zero is the worst answer in
+    # the set: it tells someone who has been working all morning that they will
+    # finish exactly where they stand, which is how a window at 21% on day one
+    # claimed it would land at 21%. Thin evidence now defers to history, and
+    # when there is no history either the projection says so instead of
+    # inventing a number.
+    slope, basis = blend_slope(observed, (prior or {}).get("expected_end"), span)
+
+    if slope is None:
+        end = exhausted = None
+    else:
+        end = max(0.0, used + slope * (1 - d_now))
+        exhausted = (duty_inv(pts, d_now + (100 - used) / slope)
+                     if (slope > 0 and end > 100) else None)
     return {
         "on": True, "curve": pts, "d_now": d_now, "slope": slope, "end": end,
         "exhausted": exhausted, "basis": basis, "active_hours": active_hours,
-        "rate_per_active_hour": (slope / active_hours) if active_hours > 0 else 0.0,
+        "observed": observed, "span": span, "prior": prior,
+        "rate_per_active_hour": ((slope / active_hours)
+                                 if (slope is not None and active_hours > 0) else None),
         "t0": t0, "t1": t1, "now": now, "used": used,
     }
 
 
-def chart_state(pct: float, gap: float) -> str:
-    """Two states, and only two. The panel answers one question at a glance:
-    is this fine, or is it not.
+# Where the verdict starts calling a window ahead of itself. Shared with
+# verdict_for so the colour and the words change on the same point.
+AHEAD_GAP = 5.0
 
-    NOT the dashboard's four-step `sevOf`. A four-colour ramp keyed to how full
-    a window is says "75% full" when the thing worth knowing is whether that
-    75% arrived early. An 81% window tracking dead on its pace needs no colour
-    at all; the same 81% two days ahead of the clock does.
+# Headroom small enough that pace stops being the question. At 95% used there
+# is nothing left to pace.
+NEAR_LIMIT_PCT = 95.0
 
-    Alert when the burn is running ahead of the pace (gap over 5 points, the
-    same threshold that turns the verdict from "on pace" to "slightly ahead"),
-    or when the window is simply spent. Everything else is fine.
+
+def chart_state(pct: float, gap: float, will_exceed: bool = False) -> str:
+    """Three states: ok, watch, alert.
+
+    Red belongs to the limit, not to the slope. A window is red when it is
+    spent, when the headroom left is negligible, or when the model says it
+    crosses 100 before it resets. Running ahead of pace is amber: a warning
+    about where this is going, not a report that it arrived.
+
+    An earlier version had two states and made alert fire at gap > 5, the same
+    point verdict_for starts saying "slightly ahead". That collapsed amber out
+    of existence: every window ahead of pace went straight to red, so red
+    stopped meaning anything.
+
+    Proximity alone would be just as wrong in the other direction. At 92% used
+    with 2% of the window left you land near 94% and never touch the wall; at
+    92% with 40% left you are going to hit it. `will_exceed` separates those,
+    and telling them apart is the whole reason the pace model exists.
     """
-    if pct >= 100:
+    if pct >= NEAR_LIMIT_PCT or will_exceed:
         return "alert"
-    return "alert" if gap > 5 else "ok"
+    if gap > AHEAD_GAP:
+        return "watch"
+    return "ok"
 
 
 def verdict_for(gap: float) -> Tuple[str, str, str]:
@@ -322,12 +385,13 @@ def _fmt_reset(epoch: Optional[float]) -> Optional[str]:
     return "%s %s" % (d.strftime("%A"), hour)
 
 
-def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
+                 prior: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     p = win.get("projection") or {}
     series = p.get("series") or []
     if p.get("error") or len(series) < 2:
         return None
-    b = pace_basis(win, weights)
+    b = pace_basis(win, weights, prior)
     used = float(win.get("used_pct") or 0)
     ws, ris = win.get("window_seconds"), win.get("resets_in_seconds")
     if not ws or ris is None:
@@ -352,17 +416,23 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
         return None
 
     proj_end = b["end"] if b["on"] else float(p.get("projected_end_pct") or used)
+    # None means there is no basis to project from yet. The axis falls back to
+    # where the window already stands while the headline says so out loud.
+    pe = used if proj_end is None else proj_end
     # Headroom above 100 so an over-cap projection is visible rather than clipped.
-    y_max = max(100.0, (int((proj_end + 8) / 25) + 1) * 25.0) if proj_end + 8 > 100 else 100.0
+    y_max = max(100.0, (int((pe + 8) / 25) + 1) * 25.0) if pe + 8 > 100 else 100.0
 
     observed = [[_parse(s["t"]), float(s["pct"])] for s in series if _parse(s.get("t")) is not None]
 
     if b["on"]:
         reference = [[t, v * 100.0] for t, v in b["curve"]]
-        fwd = [[t, used + b["slope"] * (v - b["d_now"])] for t, v in b["curve"] if t >= now]
-        fwd.insert(0, [now, used])
-        projection = fwd
-        exhausted = b["exhausted"]
+        if b["slope"] is None:
+            projection, exhausted = [], None
+        else:
+            fwd = [[t, used + b["slope"] * (v - b["d_now"])] for t, v in b["curve"] if t >= now]
+            fwd.insert(0, [now, used])
+            projection = fwd
+            exhausted = b["exhausted"]
     else:
         reference = [[t0, 0.0], [t1, 100.0]]
         projection = [[now, used], [t1, proj_end]]
@@ -382,23 +452,35 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
     # The slope stays, demoted to supporting evidence under the outcome.
     if used >= 100:
         headline = "nothing left until reset"
+    elif proj_end is None:
+        headline = "not enough history to project yet"
     elif exhausted:
         headline = "runs out around %s" % _fmt_reset(exhausted)
     elif b["on"]:
         headline = "landing near %.0f%% at reset" % b["end"]
     else:
-        headline = "landing near %s%% at reset" % p.get("projected_end_pct")
+        headline = "landing near %.0f%% at reset" % float(p.get("projected_end_pct") or used)
 
     bits: List[str] = []
-    if consequence:
+    # "on track to run out early" under a headline reading "runs out around
+    # Monday 11:38 AM" is the same sentence twice.
+    if consequence and not headline.startswith("runs out"):
         bits.append(consequence)
     if used >= 100:
         # No burn rate: it describes a future this window does not have.
         pass
     elif b["on"]:
-        bits.append("burning %.2f%% per working hour" % b["rate_per_active_hour"])
+        if b["rate_per_active_hour"] is not None:
+            bits.append("burning %.2f%% per working hour" % b["rate_per_active_hour"])
+        # Name the source. A figure drawn mostly from past weeks must not read
+        # as a measurement of this one.
+        days = (b.get("prior") or {}).get("days_observed")
+        if days and b["basis"] == "history":
+            bits.append("projected from %.0f days of history" % days)
+        elif days and b["basis"] == "blend":
+            bits.append("this window blended with %.0f days of history" % days)
     else:
-        bits.append("burning %s%% per hour" % p.get("rate_pct_per_hour"))
+        bits.append("burning %.2f%% per hour" % float(p.get("rate_pct_per_hour") or 0.0))
 
     return {
         "key": win.get("key"),
@@ -407,7 +489,9 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
         "used_pct": used,
         "verdict": verdict,
         "tone": tone,
-        "state": chart_state(used, gap),
+        "state": chart_state(used, gap, bool(
+            (proj_end is not None and proj_end > 100) or exhausted is not None)),
+        "source": b.get("basis") if b["on"] else "clock",
         "kicker": kicker,
         "detail": " · ".join(bits),
         "basis": "workday" if b["on"] else "clock",
@@ -415,7 +499,7 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
         "t1": round(t1, 3),
         "now": round(now, 3),
         "y_max": y_max,
-        "over_cap": proj_end > 100,
+        "over_cap": bool(proj_end is not None and proj_end > 100),
         "resets_at": win.get("resets_at"),
         "reference": _thin(reference),
         "observed": _thin(observed),
@@ -424,7 +508,8 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]]) -> Opti
 
 
 def build(usage: Dict[str, Any], limits: Dict[str, Any],
-          keys: Sequence[str] = PANEL_KEYS) -> Dict[str, Any]:
+          keys: Sequence[str] = PANEL_KEYS,
+          priors: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The whole panel payload. Both inputs come from the server's own cache,
     so this adds no network call and no extra ingest.
 
@@ -441,7 +526,7 @@ def build(usage: Dict[str, Any], limits: Dict[str, Any],
         w = by_key.get(key)
         if not w:
             continue
-        built = build_window(w, weights)
+        built = build_window(w, weights, (priors or {}).get(key))
         if built:
             out.append(built)
     return {
@@ -465,7 +550,8 @@ MENUBAR_KEYS = ("session", "weekly_all", "weekly_scoped")
 
 # Everything build_window returns except the three plotted series.
 MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "verdict", "tone",
-                  "state", "kicker", "detail", "basis", "resets_at", "over_cap")
+                  "state", "source", "kicker", "detail", "basis", "resets_at",
+                  "over_cap")
 
 
 def _resets_in(ts: Optional[str]) -> Optional[int]:
@@ -477,18 +563,21 @@ def _resets_in(ts: Optional[str]) -> Optional[int]:
     return max(0, int(t - _dt.datetime.now(_dt.timezone.utc).timestamp()))
 
 
+_STATE_RANK = {"ok": 0, "watch": 1, "alert": 2}
+
+
 def _severity(w: Dict[str, Any]) -> Tuple[int, float]:
     """How much a window deserves the bar's attention.
 
-    Ordered the way chart_state thinks: a window in alert outranks one that is
-    merely filling up, and among equals the fuller wins. The rule lives here so
-    the icon's colour and the panel's colours can never disagree about which
-    window is the problem.
+    Ordered the way chart_state thinks: alert outranks watch outranks ok, and
+    among equals the fuller wins. The rule lives here so the icon's colour and
+    the panel's colours can never disagree about which window is the problem.
     """
-    return (1 if w.get("state") == "alert" else 0, float(w.get("used_pct") or 0.0))
+    return (_STATE_RANK.get(w.get("state") or "ok", 0), float(w.get("used_pct") or 0.0))
 
 
-def menubar(usage: Dict[str, Any], limits: Dict[str, Any]) -> Dict[str, Any]:
+def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
+            priors: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The panel payload with the chart series dropped and a worst-window pick.
 
     A menu bar item polls this on a timer and needs two strings and a number,
@@ -497,7 +586,7 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any]) -> Dict[str, Any]:
     that pins one window to the bar can still colour the icon by the window that
     is actually in trouble.
     """
-    full = build(usage, limits, keys=MENUBAR_KEYS)
+    full = build(usage, limits, keys=MENUBAR_KEYS, priors=priors)
     if not full.get("ok"):
         return {"ok": False, "error": full.get("error"), "windows": [], "worst": None}
     wins = []

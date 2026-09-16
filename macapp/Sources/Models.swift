@@ -10,7 +10,9 @@ enum Severity: Int, Comparable {
     var color: Color {
         switch self {
         case .calm:  return .green
-        case .watch: return .orange
+        // Amber-leaning rather than pure yellow, which washes out against a
+        // light menu bar.
+        case .watch: return Color(red: 0.90, green: 0.68, blue: 0.0)
         case .alert: return .red
         }
     }
@@ -34,13 +36,16 @@ struct UsageWindow: Codable, Identifiable {
 
     var id: String { key }
 
-    /// The server already decided this in `chart_state` and `verdict_for`.
-    /// Reading both here rather than re-deriving from usedPct keeps the app
-    /// from inventing a second opinion about the same window.
+    /// `state` is the whole answer; the server's chart_state already weighed
+    /// proximity, pace and the projected crossing. Reading `tone` here as well
+    /// is what previously made amber unreachable, since every window ahead of
+    /// pace carried both tone "warning" and state "alert".
     var severity: Severity {
-        if state == "alert" || tone == "critical" { return .alert }
-        if tone == "warning" { return .watch }
-        return .calm
+        switch state {
+        case "alert": return .alert
+        case "watch": return .watch
+        default:      return .calm
+        }
     }
 
     /// What the bar shows for this window: a whole number, no decimal point.

@@ -33,16 +33,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from . import burn
 from . import config
 from . import daily
+from . import history
 from . import panel
 from . import parse_usage
 from . import rate_limits
 from . import store
 
 PORT = config.PORT
-_cache = {"usage": None, "usage_at": 0, "limits": None, "limits_at": 0, "ingest": None}
+_cache = {"usage": None, "usage_at": 0, "limits": None, "limits_at": 0, "ingest": None,
+          "priors": None, "priors_at": 0}
 _lock = threading.Lock()
 
 TTL_USAGE, TTL_INGEST = 60, 120
+# History moves over days. Rebuilding it reads the whole sample table.
+TTL_PRIORS = 900
 # The usage endpoint rate limits an over-eager client; 45s earned a 429. These
 # numbers barely move minute to minute, so poll gently and back off hard.
 TTL_LIMITS = 300
@@ -65,6 +69,28 @@ def _maybe_ingest(force=False):
             _cache["ingest"] = {"error": "%s: %s" % (type(e).__name__, e)}
         _last_ingest[0] = time.time()
     return _cache["ingest"]
+
+
+def _priors():
+    """What a full window of each kind usually consumes, from the sample history.
+
+    The projection leans on this while a window is too young to speak for
+    itself. The current window is excluded by id so it never helps predict
+    itself, and the whole thing is cached: it moves over days, not minutes.
+    """
+    if _cache["priors"] is not None and time.time() - _cache["priors_at"] < TTL_PRIORS:
+        return _cache["priors"]
+    out = {}
+    try:
+        wins = (_limits() or {}).get("windows") or []
+        secs = {w.get("key"): w.get("window_seconds") for w in wins}
+        current = {w.get("key"): history.window_id(w.get("resets_at")) for w in wins}
+        samples, _names = store.all_limit_samples("2000-01-01T00:00:00+00:00")
+        out = history.priors(samples, secs, current)
+    except Exception:
+        out = {}      # no history is a valid answer; the panel says so
+    _cache["priors"], _cache["priors_at"] = out, time.time()
+    return out
 
 
 def _usage():
@@ -197,14 +223,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # Both halves come from the cache _limits() and _usage() already
                 # own, so a client polling this adds no api.anthropic.com traffic
                 # and no extra ingest, however often it asks.
-                return self._send(200, json.dumps(panel.build(_usage(), _limits()), default=str),
-                                  "application/json")
+                return self._send(200, json.dumps(
+                    panel.build(_usage(), _limits(), priors=_priors()), default=str),
+                    "application/json")
             if path == "/api/menubar":
                 # Same model as /api/panel, minus the plotted series. A menu
                 # bar polls on a timer forever, so it gets its own shape
                 # rather than pulling 9 KB of chart points every minute.
-                return self._send(200, json.dumps(panel.menubar(_usage(), _limits()), default=str),
-                                  "application/json")
+                return self._send(200, json.dumps(
+                    panel.menubar(_usage(), _limits(), _priors()), default=str),
+                    "application/json")
             if path == "/api/ingest":
                 _cache["usage"] = None
                 return self._send(200, json.dumps(_maybe_ingest(force=True)), "application/json")
