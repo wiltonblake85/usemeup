@@ -1,372 +1,346 @@
 # UseMeUp
 
-A local dashboard for your Claude usage: live rate-limit windows, token and cost
-totals, and which sessions actually cost you something.
+Will your Claude subscription last until the reset? UseMeUp answers that for each
+rate-limit window, on a local page and in the macOS menu bar, and it measures
+your pace against the hours you actually work instead of a 24-hour clock.
 
-It reads transcripts already sitting on your disk. No account to create, no data
-leaves your machine, and the only network call it ever makes is to
-`api.anthropic.com` to ask what your rate-limit windows look like.
+Everything runs on your machine. The only network call it makes on your behalf is
+to `api.anthropic.com`, to ask what your windows look like, and there is a mode
+that doesn't even do that.
 
 ```
 uvx --from git+https://github.com/wiltonblake85/usemeup usemeup
 ```
 
-or, if you prefer it installed:
+or, installed:
 
 ```
 pipx install git+https://github.com/wiltonblake85/usemeup
 usemeup
 ```
 
-Python 3.9+, **no dependencies at all** — standard library only, so the entire
-supply chain is this one repo.
+Python 3.9 or later and **no dependencies**. Standard library only, so the whole
+supply chain is this repo.
 
 ```
-usemeup            index transcripts and open the dashboard
-usemeup verify     recount from raw transcripts and check the index
-usemeup daily      a terminal table, no browser needed
-usemeup prices     show the resolved price table and where it came from
-usemeup ingest     re-scan without serving
-usemeup agent      install | status | uninstall a macOS LaunchAgent that keeps it running
+usemeup              serve the page on http://127.0.0.1:8787
+usemeup agent        install | status | uninstall a LaunchAgent that keeps it running
+usemeup statusline   a Claude Code status line command that records your limits
+usemeup ingest       re-scan local transcripts without serving
+usemeup verify       recount the transcript index from raw files
+usemeup daily        transcript totals as a terminal table
+usemeup prices       the price table behind those totals, and where it came from
 ```
 
-From a clone: `PYTHONPATH=src python3 -m usemeup.cli`. Unit tests, also stdlib
-only: `PYTHONPATH=src python3 -m unittest discover tests`.
+From a clone: `PYTHONPATH=src python3 -m usemeup.cli`. Tests, also stdlib only:
+`PYTHONPATH=src python3 -m unittest discover tests`.
 
----
+## Why another usage meter
 
-## It can prove its own numbers
+There are plenty of menu bar meters for Claude limits. Most stop at a percentage
+and a countdown, and the ones I found that forecast all do it the same way:
+percent used, divided by the fraction of the window that has elapsed. That
+treats a 7-day window as 168 equal hours. Nobody spends anything while asleep, so by Monday breakfast that arithmetic says you're
+comfortably under pace, and by Wednesday afternoon it says you'll blow through
+the limit on Sunday night. Both readings come from the clock, not from you.
 
-Every tool in this category claims the numbers are right. This one ships the check.
+On my own account, switching the basis from the clock to my working hours moved
+one weekly forecast from "hits 100% Sunday 7:38 PM" to "does not hit 100%". The
+first is an alarm you learn to ignore. The second is something you can plan a
+week around.
+
+## What the page shows
+
+One card, **Rate limit windows**, with a block for each window the API reports:
+the 5-hour session window, the 7-day window across all models, and any 7-day
+window scoped to one model (on my plan that is "Fable only", and it is usually
+the one that binds).
+
+Each block leads with where the window ends up, in words: *landing near 92% at
+reset*, or *runs out around Tuesday 9:25 AM*. Under that sit the pace verdict
+with its burn rate, then the reset countdown.
+
+### The week as seven daily buckets
+
+Anthropic gives you one number for the week
+and most people plan in days, so each 7-day window is also drawn as seven bars.
+A seventh of the week (14.3%) is the day's share. A bar shows what that day
+consumed, and anything above the share line is drawn in red with the amount on
+it. Unspent share banks forward, so a quiet Sunday lets Monday spend more, and a
+heavy Tuesday draws the bank down. Today's bar carries a dashed cap at what it
+may still spend, and the caption says it outright: *11.5% of a 14.3% share,
++46.9% banked from earlier days, 49.7% left today*.
+
+Days are cut at the hour the week resets, not at midnight, which is why the seven
+bars sum exactly to the weekly figure. Up to four earlier weeks are summarised
+under the chart as history builds.
+
+### A burn-up chart per window
+
+A solid line for what you've consumed, a dashed
+line for where the forecast lands by reset, and a grey reference for even pace.
+The point where the forecast meets 100% is marked with its day and time.
+
+## How the forecast works
+
+A two-button control on the card switches the basis between **24h pace** and
+**work day**, with an hours-per-day selector that defaults to 10. On the
+work-day basis the grey reference becomes a staircase that goes flat outside
+working hours, the dashed forecast bends with it, and the verdict underneath is
+recomputed to match, with the burn rate quoted per working hour. Windows shorter
+than 36 hours stay on the wall clock, because a 5-hour window would otherwise use
+up its "working day" before it closes.
+
+### Your hours come from your own history, from two instruments
+
+Hour of day
+comes from the rate-limit samples the server records every five minutes: the rise
+between two readings is consumption that happened in that interval, and because
+the figure is account-wide it sees cloud sessions and claude.ai. The weekday
+split comes from the local transcript index until enough weeks of samples pile up
+to carry it, since one week of samples says things like "Sunday is 2% of the
+week", which is noise. The page footnote always names which source drove the
+hours. On my account the two instruments share no wiring and still land on the
+same working day, 7 AM to about 4 PM.
+
+### Early in a window, the forecast leans on past windows
+
+Nine hours after a
+reset there is almost no slope to measure. An earlier build handled that badly in
+both directions: it either projected a flat line (you finish where you stand) or
+extrapolated 21% in a morning to thousands of percent by the weekend. Now the
+slope is a blend. Below 5% of the working time elapsed it comes from what a full
+window has cost this account before; above 25% it comes from this window alone;
+in between, from both in proportion. With no history and no span, the headline
+reads *not enough history to project yet*. A number with nothing behind it is
+the failure this replaced, so "no opinion" survives all the way to the screen,
+and the payload carries a `source` field (history, blend, observed or clock) that
+the page prints.
+
+Those historical figures are floors. A window that reaches 100 stops rising, so
+demand past the cap is invisible, and the code reports how many windows were
+capped so that stays checkable.
+
+### A spent window gets no pace verdict
+
+At 100% used the verdict is *spent* and
+the burn rate and forecast are dropped. Pace is a claim about the future, and a
+window with no future needs different words. Before this rule, a window at 100%
+used with 98% elapsed was cheerfully reported as "on pace".
+
+### Colour means three things
+
+Green is on pace or under. Amber is ahead of pace.
+Red is the limit itself: spent, at 95% or above, or forecast to cross 100% before
+reset. Red uses the forecast, not the raw number, because 92% used with two hours
+left never touches the wall and 92% with three days left certainly will.
+
+### Two honesty rules for the daily buckets
+
+The buckets are derived, not reported, so two caveats apply. The API reports
+whole percent. A day under 1% of the week therefore reads as zero. And daily
+consumption is only the rise in the cumulative figure while something was there
+to sample it, which means the server has to be running for a day to be measured. A rise that happened while nothing was sampling is still real
+usage, but its timing is unknown, so it is spread evenly across the gap, drawn
+hatched, and bracketed with the amount: *24.5% over 5.4 days not sampled, timing
+unknown*. Evenly, and not by a cleverer proxy, on purpose. An earlier build
+placed gap usage by local transcript volume. Cloud sessions leave no transcripts
+here, so the proxy was blind to the work it was meant to locate and drew four
+near-empty days that had been busy.
+
+## The menu bar app (macOS)
+
+`macapp/` is a small SwiftUI front end over the same local server. The bar shows
+every weekly window side by side, the model-scoped one first:
 
 ```
-usemeup verify
+[F 69%] [All 60%]
 ```
 
-`usemeup verify` re-reads your raw transcripts and recounts everything from scratch. It
-shares no counting, deduplication or pricing code with the dashboard, so it cannot
-inherit the dashboard's mistakes. It compares every day and exits non-zero if
-anything disagrees.
+Each window is a small filled pill: green while it is fine, amber when you are
+ahead of pace, red when the limit itself is in play. The first version drew grey
+labels and coloured figures straight onto the bar, and I couldn't read it. The
+menu bar takes its tint from the wallpaper behind it, so text drawn onto it has
+no contrast you can count on. A pill carries its own background, with white text
+on green and red and near-black on amber, and it reads the same over anything.
+
+A window at its cap reads `spent`. The 5-hour window joins the others only while
+it is amber or red: most days it is noise, but when it hits the wall it blocks
+every model.
+
+An earlier build let the single worst window take over the bar. That hid the
+wrong thing. Once Fable is nearly spent I stop using Fable, that question's
+closed, and the all-models figure is the one I need next. It shouldn't be
+pushed out of view by a window I have already acted on.
+
+Clicking the bar opens a panel with the same headline, verdict and reset
+countdown per window as the page.
 
 ```
-recounting from raw transcripts (importing none of the tool's logic)…
-  3,448 files read, 104,222 unique calls after dedup, 164 days
-
-checked 164 day(s)
-  recount total : $22486.88
-  index total   : $22486.88
-
-OK. Every checked day matches on calls, output tokens and cost.
+./macapp/build.sh              build, install to /Applications, start at login
+./macapp/build.sh --swift      recompile the Swift only
+./macapp/build.sh --no-install leave it in macapp/build/
 ```
 
-This is not decoration. It found three real bugs during development, each of which
-had already survived a round of "I checked the code and it looks right":
+The build bundles the Python server with PyInstaller, so the app runs on a Mac
+with no Python setup. If a UseMeUp server is already listening on port 8787 the
+app joins it; otherwise it starts its bundled one and stops it again on quit.
+Building needs the Xcode command line tools and a Homebrew `python3.12`. The app
+is Apple silicon only and ad-hoc signed for now, which is fine on the Mac that
+built it and not yet fit to hand to someone else.
 
-1. **Deduplication kept the wrong copy.** A streamed response is written to the
-   transcript repeatedly as it grows, and resumed sessions replay compacted copies.
-   Keeping the first record meant storing `output_tokens: 1` where the finished
-   response was `56,354`. Fixed by keeping the row with the largest token total.
-2. **Days were bucketed by UTC date.** About 10% of calls landed on the wrong
-   calendar day for a US user; an evening session bled into tomorrow. Fixed by
-   cutting days in your own timezone.
-3. **The recount and the index disagreed about what to exclude.** The tool can make
-   its own throwaway calls to refresh a token, and only one of the two was ignoring
-   them. Fixed by defining the rule once, in `config.py`, and having both read it.
-4. **The exclusion rule was a substring.** It skipped any path containing
-   `usemeup`, which would have silently dropped every Claude Code session run inside
-   a checkout of this repo. Found in an audit before it bit anyone; the rule is now
-   an exact match on the refresh folder's name, applied to both transcript roots.
+## Where the numbers come from
 
-The first two were found by recounting, not by reading code. That is the entire
-argument for shipping the recount.
+There are two sources, chosen with `USEMEUP_SOURCE`.
 
-Two definitions worth knowing when you check a single day by hand:
+### `endpoint`, the default
 
-- A call is dated by the timestamp of its largest recorded copy. For a streamed
-  response that is the final chunk, so a call that starts at 11:59 PM and finishes
-  at 12:01 AM belongs to the second day, in the index and in the recount alike.
-- Claude Code writes placeholder assistant messages with the model name
-  `<synthetic>` (a request that failed before a response arrived, for instance).
-  They carry a usage block of zeros and are not API calls, so neither side counts
-  them.
+`rate_limits.py` reads your Claude Code OAuth token
+from the macOS Keychain (or `~/.claude/.credentials.json`), sends it to
+`https://api.anthropic.com/api/oauth/usage` and nowhere else, keeps the limit
+figures, and discards the token. This is the only source that reports the
+model-scoped weekly window.
 
----
+### `statusline`
 
-## What you get
+Claude Code hands its status line command a JSON document that,
+for Pro and Max subscribers, includes the 5-hour and 7-day figures
+([docs](https://code.claude.com/docs/en/statusline)). `usemeup statusline` is
+such a command. It saves those figures to `~/.usemeup/statusline.json` and prints
+`5h 24% · 7d 41%`. In this mode the server reads that file, and `rate_limits.py`
+never opens the Keychain or the network. In `~/.claude/settings.json`:
 
-**Rate-limit windows, live.** Your 5-hour session window and 7-day windows, read
-straight from the API, with the reset countdown and a pace verdict for each.
+```json
+{ "statusLine": { "type": "command", "command": "usemeup statusline" } }
+```
 
-**The week as seven daily buckets.** Anthropic gives you one number for the week.
-Most people plan in days, so each 7-day window is also drawn as seven bars: one
-seventh of the week (14.3%) is the day's share, a bar shows what that day actually
-consumed, and the part above the share line is the overspend, in red, with the
-amount on it. Unspent share banks forward, so a quiet Sunday means Monday can spend
-more; a heavy Tuesday draws the bank down. Today's bar carries a dashed cap at what
-it may still spend (its share plus the bank), and the line under the chart states
-it plainly: *11.5% of a 14.3% share, +46.9% banked from earlier days, 49.7% left
-today*.
+Already have a status line? `usemeup statusline --passthrough "your command"`
+runs yours on the same input and appends the figures.
 
-Days are cut at the hour the week resets, not at midnight, so the seven bars sum
-exactly to the weekly figure and the last one ends at reset. Up to four prior
-weeks are summarised under the chart as history accumulates.
+I checked the two sources against each other on a live turn. The status line's
+`five_hour` and `seven_day` matched the endpoint's session and all-models windows
+on both percent and reset time, so they feed one history. What the status line
+costs you:
 
-Two honesty rules, because this is derived, not reported. First, the API reports
-whole percent, so a day under 1% of the week reads as 0. Second, daily consumption
-is the rise in the cumulative figure while something was sampling it. The server
-samples every five minutes while it runs (see below). A rise that happened while
-it was not running is still real usage, but its timing is not known. It is spread
-evenly across the gap, drawn hatched, and bracketed on the chart with the amount:
-*24.5% over 5.4 days not sampled, timing unknown*. The bank arithmetic assumes the
-even spread and the caption says so.
+- **No model-scoped weekly window.** In that same reading the all-models window
+  stood at 60% and the Fable-only window at 69%. The status line couldn't see
+  the second one, and it was the one that mattered.
+- **Only as fresh as your last Claude Code turn on this machine.** Cloud sessions
+  and claude.ai move the real number without moving this one. Each sample is
+  filed under the time it was captured, never under "now", and a reading more
+  than six hours old is refused instead of being shown as current.
 
-Evenly, and not by some cleverer proxy, on purpose. An earlier build placed gap
-usage by the token volume in the local transcript index. Cloud sessions leave no
-transcripts on this machine, so that proxy was blind to exactly the work it was
-meant to locate, and it drew four near-empty days that were in fact busy. A method
-that cannot see half the usage should not pretend to know where it went.
-
-**Burn-rate projection, as a chart.** Each window gets a burn-up chart: a solid
-line for what you have actually consumed, a dashed line for where the current rate
-lands you by reset, and a grey diagonal for even pace. Sitting below the diagonal
-means the window will expire with capacity unused; crossing it means you are
-outrunning the clock, and the point where the projection meets 100% is marked.
-
-The projection says which basis it used: `recent` when enough sampled history
-exists to measure a slope, `average` when there is only one reading. It is a
-straight-line extrapolation and is labelled as one.
-
-**Most expensive sessions.** Ranked by cost, with subagent calls folded into the
-session that spawned them. This is usually the fastest way to find where the money
-went.
-
-**Spend by day, model, project and source.** One colour per model, fixed: Opus is
-persimmon, Fable is green, Sonnet is blue, Haiku is purple, and within a family the
-newest generation is drawn at full strength with each earlier one a step paler.
-A model keeps its colour across the 7d/30d/90d ranges and from one day to the
-next, so you can learn the chart once.
-
-**What this Mac cannot see, on the face of the chart.** The spend charts are built
-from transcripts on this machine. Cloud sessions write nothing here (see below), so
-a day of cloud work is an empty bar. The account-wide rate-limit windows, sampled
-every five minutes while the server runs, know better: each day's tooltip shows how
-far each weekly window moved that day, and a ring above a bar marks a day where a
-window scoped to a model climbed while the local index holds no calls for that
-model. That ring is the difference between "nothing happened Tuesday" and "Tuesday
-happened somewhere else".
-
----
-
-## Where the data comes from
-
-| Source | Location |
-|---|---|
-| Claude Code CLI | `~/.claude/projects/**/*.jsonl` |
-| Cowork desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/**/*.jsonl` |
-
-The Cowork root holds only what the desktop app executed **on this machine**. It is
-stored per session rather than per project, so it appears as one bar in the project
-chart, labelled "Cowork, local runs". If you mostly work in cloud sessions, that bar
-is largely your local scheduled tasks, and the label is chosen so it does not read as
-"all of Cowork".
-
-**Cloud sessions are in neither.** Cowork in the cloud, Claude Code on the web and
-cloud scheduled tasks run on Anthropic's servers and write nothing to your machine.
-They are counted in the rate-limit meters, which are account-wide, and cannot appear
-in the charts, which are built from local files. That gap is real, and the day chart
-marks it per day (see above) rather than quietly implying the bars are the whole
-picture.
-
-The two halves of the page also cut days differently, by design: the allotment
-view cuts at the weekly reset hour so seven bars sum to the weekly figure; the spend
-charts cut at midnight in your zone because that is what a calendar day means. Each
-chart says which it uses.
-
-The Cowork path is macOS-specific. On Linux and Windows the tool looks in the
-platform equivalents and, finding nothing, says so at startup and shows CLI data
-only rather than reporting a silently partial total.
-
----
+`auto` uses the endpoint and falls back to the status line when the endpoint
+gives nothing. The response says so in `fallback_from`.
 
 ## What each file touches
 
 | File | Reads | Network | Credential |
 |---|---|---|---|
 | `config.py` | nothing | none | none |
-| `store.py` | your transcripts (read-only) → `~/.usemeup/usage.db` | none | none |
-| `parse_usage.py` | `~/.usemeup/usage.db` | none | none |
-| `pricing.py` | the cache, the bundled table | **raw.githubusercontent.com** (public file, GET) | none |
-| `burn.py` | recorded samples | none | none |
-| `daily.py` | recorded samples | none | none |
-| `coverage.py` | recorded samples | none | none |
-| `agent.py` | writes `~/Library/LaunchAgents/…usemeup.plist`, runs `launchctl` | none | none |
-| `verify.py` | your transcripts, the index | none | none |
 | `rate_limits.py` | macOS Keychain, or `~/.claude/.credentials.json` | api.anthropic.com only | **yes**, in memory |
 | `statusline.py` | stdin from Claude Code, `~/.usemeup/statusline.json` | none | none |
+| `history.py`, `burn.py`, `daily.py`, `coverage.py` | recorded samples | none | none |
+| `panel.py` | the samples and the transcript index | none | none |
+| `store.py` | your transcripts (read-only), writes `~/.usemeup/usage.db` | none | none |
+| `parse_usage.py` | `~/.usemeup/usage.db` | none | none |
+| `pricing.py` | the cache, the bundled table | raw.githubusercontent.com (public file, GET) | none |
+| `verify.py` | your transcripts, the index | none | none |
+| `agent.py` | writes `~/Library/LaunchAgents/…usemeup.plist`, runs `launchctl` | none | none |
 | `server.py` | the above | binds `127.0.0.1` only | none |
 
-While it runs, `server.py` also probes the rate-limit endpoint on its own every five
-minutes, so the daily buckets keep filling with the page closed. It goes through the
-same cache and back-off as the page does, so that is the ceiling either way: one
-probe per five minutes, never more, and the 429 back-off applies to both. Samples
-are kept for 90 days in `~/.usemeup/usage.db`, a few megabytes at most.
+`rate_limits.py` is the file to audit. The token is never written to disk, logged,
+cached or returned, and everything the module returns passes through `_safe()`
+first. It is read-only on your credential: it never writes to the Keychain and
+never uses the refresh token, so it can't rotate or invalidate your Claude Code
+login. On first run macOS asks whether Python may read the Claude Code
+credential. That prompt is the Keychain's. Deny it and the page has nothing to
+show, which is the case `USEMEUP_SOURCE=statusline` exists for.
 
-Two files reach the network and no others. `pricing.py` does a plain GET of a
-public price list; nothing about you is sent, no token, no identifiers, no query
-parameters, and `USEMEUP_OFFLINE=1` disables it. `rate_limits.py` is the one worth
-auditing closely. The token is never
-written to disk, logged, cached, or returned; everything the module returns passes
-through `_safe()` first. It is **read-only** on your credential: it never writes to
-the Keychain and never uses the refresh token, so it cannot rotate or invalidate
-your Claude Code login.
+`pricing.py` does a plain GET of a public price list. Nothing about you is sent,
+and `USEMEUP_OFFLINE=1` turns it off.
 
-On first run macOS asks whether Python may read the Claude Code credential. Deny it
-and everything except the rate-limit panel still works.
+The server probes the endpoint at most once every five minutes, page open or
+closed, and backs off to as long as 30 minutes after an HTTP 429. Samples are kept
+for 90 days in `~/.usemeup/usage.db`, a few megabytes at most.
 
----
+## Keeping it running
 
-## Two things to know before you run it
-
-**Screenshots leak your directory names.** The project and session charts render the
-paths you have worked in. Before you post a screenshot anywhere:
-
-```
-USEMEUP_DEMO=1 python3 server.py
-```
-
-Demo mode replaces project and session labels with stable pseudonyms and keeps every
-number real, so the page stays coherent and is safe to share.
-
-**Auto-refresh spends your tokens, so it is off by default.** The Claude Code access
-token lives 8 to 12 hours and only Claude Code refreshes it, on a real API call. If
-you have not used the CLI recently the token is stale and the rate-limit panel cannot
-load. With `USEMEUP_AUTO_REFRESH=1` the dashboard will run `claude -p ok` itself to
-make Claude Code refresh its own credential, at a cooldown of once per ten minutes.
-That costs a handful of Haiku tokens roughly once a day. It is opt-in because a tool
-that quietly makes billable calls on your account should not be a surprise you
-discover later.
-
-Without it, the panel tells you the token expired and that `claude -p ok` fixes it.
-(`claude auth status` does **not** refresh it; it only reads local state.)
-
----
-
-## Keeping it running (macOS)
-
-While it runs, the server also re-scans the transcript folders on the same five-minute tick (unchanged files are skipped), so the charts are current the moment the page opens.
-
-The daily view is only as complete as the hours the server was up to sample. A
-Terminal window you close at night is a gap in tomorrow's chart. So on macOS:
+The forecast and the daily buckets are only as complete as the hours the server
+was up to sample. A Terminal window you close at night is a gap in tomorrow's
+chart. On macOS:
 
 ```
 usemeup agent install
 ```
 
 writes a LaunchAgent (`~/Library/LaunchAgents/com.wiltonblake.usemeup.plist`) that
-starts the dashboard at login, restarts it if it exits, and keeps it serving with no
-window open. It runs exactly what you would type, from the same Python and the same
-install you ran the command from, so a source checkout has to stay where it is. Logs
-go to `~/.usemeup/agent.log`; `usemeup agent status` shows whether it is loaded and
+starts the server at login, restarts it if it exits, and keeps it serving with no
+window open. It runs from the same Python and the same install you ran the
+command from, so a source checkout has to stay where it is. Logs go to
+`~/.usemeup/agent.log`. `usemeup agent status` shows whether it is loaded and
 listening, and `usemeup agent uninstall` removes it.
 
-The agent turns **auto-refresh on** by default, because an unattended meter that
-goes stale every 8 to 12 hours defeats the purpose; pass `--no-auto-refresh` to keep
-the read-only behaviour. The first time it runs, macOS may ask whether Python may
-use the Claude Code credential in the Keychain. That prompt is the Keychain's, not
-this tool's, and it appears once.
+### Auto-refresh spends your tokens, so it is off unless you ask
 
-`ps` will show `python3 -m usemeup.cli serve --no-open` owned by launchd. It binds
-`127.0.0.1` like every other run; the agent changes when it runs, not what it does.
-
----
+The Claude Code
+access token lives 8 to 12 hours and only Claude Code refreshes it, on a real API
+call. If you haven't used the CLI lately the token is stale and the endpoint
+can't be read. With `USEMEUP_AUTO_REFRESH=1` the server runs `claude -p ok`
+itself, at most once every ten minutes, so that Claude Code renews its own
+credential. That costs a handful of Haiku tokens about once a day. A tool that
+makes billable calls on your account shouldn't be something you find out about
+later, so the plain `usemeup` command leaves it off. The agent turns it on,
+because an unattended meter that goes stale twice a day defeats the point; pass
+`--no-auto-refresh` to keep it read-only. Without it, the page tells you the
+token expired and that `claude -p ok` fixes it. (`claude auth status` doesn't
+refresh it. It only reads local state.)
 
 ## Configuration
 
 | Variable | Effect |
 |---|---|
 | `USEMEUP_PORT` | server port (default 8787) |
-| `USEMEUP_TZ` | IANA zone for day bucketing (default: your system zone) |
-| `USEMEUP_DEMO=1` | redact project and session names |
+| `USEMEUP_SOURCE` | `endpoint` (default), `statusline` or `auto` |
 | `USEMEUP_AUTO_REFRESH=1` | allow the token refresh described above |
-| `USEMEUP_OFFLINE=1` | never fetch live prices; use the cache or bundled table |
-| `USEMEUP_DB` | override the index location |
-| `USEMEUP_SOURCE` | `endpoint` (default), `statusline`, or `auto`. See below |
+| `USEMEUP_TZ` | IANA zone for day bucketing (default: your system zone) |
+| `USEMEUP_DB` | override the database location |
+| `USEMEUP_OFFLINE=1` | never fetch live prices |
+| `USEMEUP_DEMO=1` | replace project and session names with stable pseudonyms in `/api/usage` and the export |
 
-### Rate limits without a credential
+## The transcript index, and why it left the page
 
-Claude Code hands its status line command a JSON document that, for Pro and Max
-subscribers, includes the 5-hour and 7-day figures
-([docs](https://code.claude.com/docs/en/statusline)). `usemeup statusline` is such
-a command: it saves those two figures to `~/.usemeup/statusline.json` and prints
-`5h 24% · 7d 41%`. With `USEMEUP_SOURCE=statusline` the server reads that file and
-`rate_limits.py` never opens the Keychain or the network.
+UseMeUp started as a cost dashboard. It indexed the Claude Code and Cowork
+transcripts on this Mac, priced every call at API list rates, and charted spend
+by day, model, project and session. Those charts are gone from the page, and the
+reason is worth writing down.
 
-In `~/.claude/settings.json`:
+They were accurate about the wrong thing. Cloud sessions, Claude Code on the web
+and cloud scheduled tasks run on Anthropic's servers and write nothing to your
+disk. When my interactive work moved to the cloud, local transcripts went from
+about a fifth of my indexed spend per month to 1%, while the account-wide meters
+kept climbing. A chart that is blind to most of the work reads as "a quiet week"
+when the week was anything but. And a subscription isn't billed per token
+anyway, so the dollar figures were a size signal at best.
 
-```json
-{ "statusLine": { "type": "command", "command": "usemeup statusline" } }
-```
+The index is still built, for one reason: the work-day model takes its weekday
+shape from it. The command line tools over it still work if you want them.
+`usemeup daily` prints the totals. `usemeup verify` recounts them from the raw
+files with none of the indexing code, and exits non-zero on any disagreement; it
+caught a deduplication bug that stored `output_tokens: 1` for a response that
+finished at 56,354, and a day-bucketing bug that put about 10% of calls on the
+wrong date. `usemeup prices` shows the price table, which resolves from the
+[LiteLLM price database](https://github.com/BerriAI/litellm), first-party
+Anthropic rows only, with a bundled fallback. `GET /api/export` dumps everything
+as JSON.
 
-Already have a status line? Keep it: `usemeup statusline --passthrough "your command"`
-runs yours on the same input and appends the figures.
-
-What you give up, so you can choose with your eyes open:
-
-- **No model-scoped weekly window.** Only the usage endpoint reports "7-day window,
-  <model> only", and that is often the limit that actually binds.
-- **Only as fresh as your last Claude Code turn on this machine.** Cloud sessions
-  and claude.ai move the real number without moving this one. Each sample is filed
-  under the time it was captured, never under "now", and a reading more than six
-  hours old is refused rather than shown as current.
-
-`USEMEUP_SOURCE=auto` uses the endpoint and falls back to the status line when the
-endpoint gives nothing; the response says so in `fallback_from`.
-
----
-
-## Notional spend
-
-Dollar figures apply published API list prices from `pricing.json` to your token
-counts. **A Claude subscription is not billed per token**, so this is a relative size
-signal, not an invoice. It answers "which work is expensive" well and "what do I owe"
-not at all.
-
-Cache reads dominate token volume and price at a tenth of input, so long agentic
-sessions with large replayed context dominate the totals. A short, high-value
-conversation will always look small next to one long agentic run.
-
-Prices resolve from the community-maintained
-[LiteLLM price database](https://github.com/BerriAI/litellm), cached locally for 24
-hours, falling back to the bundled `pricing.json` when the network is unavailable.
-`usemeup prices` shows the table and its provenance; the dashboard footer names the
-source and its age, so a stale table is visible rather than quietly wrong.
-
-Only rows whose `litellm_provider` is `anthropic` are used. The `us.anthropic.*`
-rows in that file are Amazon Bedrock regional prices carrying a 10% premium, and
-using them would overstate every figure by that much. The first-party rows were
-cross-checked against
-[Anthropic's published pricing](https://platform.claude.com/docs/en/about-claude/pricing)
-for Opus 5, Opus 4.8, Opus 4.7, Fable 5.1, Sonnet 5 and Haiku 4.5, and matched
-exactly on all five price fields.
-
-`USEMEUP_OFFLINE=1` skips the fetch entirely.
-
----
-
-## How it stays fast
-
-About 100k call records across roughly 5 GB of transcripts. A `PRIMARY KEY` on
-`(requestId, message.id)` makes deduplication exact, and files whose mtime and size
-have not changed are skipped, so a refresh costs a `stat()` per file. First ingest is
-about 15 seconds; after that it is effectively free. `GET /api/export` dumps everything as JSON.
-
-`usemeup ingest` forces a rescan. `store.py` carries a `SCHEMA_VERSION`. Bumping it drops and rebuilds the index on the
-next connect, which is how column or semantics changes take effect. Recorded
-rate-limit samples deliberately survive that rebuild, since they are timestamped
-observations that cannot be recovered by re-reading transcripts.
-
----
+Sources indexed: `~/.claude/projects/**/*.jsonl` for the CLI, and
+`~/Library/Application Support/Claude/local-agent-mode-sessions/**/*.jsonl` for
+Cowork runs executed on this machine. Unchanged files are skipped by mtime and
+size, so a rescan of roughly 100k calls costs a `stat()` per file.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Not affiliated with, endorsed by, or sponsored by Anthropic.

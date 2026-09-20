@@ -166,7 +166,7 @@ th.r,td.r{text-align:right;padding-right:0}
     <button class="btn" id="theme">theme</button>
   </header>
   <div id="demo-banner"></div>
-  <p class="sub" id="sub">reading local session files…</p>
+  <p class="sub" id="sub">Account-wide rate limit windows, with pace measured against your own working hours.</p>
 
   <div class="card">
     <header style="margin-bottom:14px">
@@ -177,114 +177,30 @@ th.r,td.r{text-align:right;padding-right:0}
   </div>
 
 
-  <div class="card">
-    <header style="margin-bottom:14px">
-      <div><div class="kicker">Local transcripts · calendar days · one colour per model</div><h2 style="margin:0">Notional spend by day</h2></div>
-      <span id="range-ctl"></span>
-    </header>
-    <div class="legend" id="legend-day"></div>
-    <div id="chart-day"></div>
-    <p id="day-note" style="font-size:11.5px;color:var(--text-muted);margin:14px 0 0"></p>
-  </div>
 
-  <div class="card">
-    <div class="kicker">Local runs only · cloud sessions are not on this Mac</div>
-    <h2>Where the usage comes from</h2>
-    <div id="chart-source"></div>
-  </div>
-
-  <div class="card">
-    <div class="kicker">Top twelve folders</div>
-    <h2>Notional spend by project</h2>
-    <div id="chart-proj"></div>
-  </div>
-
-  <div class="card">
-    <header style="margin-bottom:14px">
-      <div><div class="kicker">Subagent calls folded into their parent</div><h2 style="margin:0">Most expensive sessions</h2></div>
-    </header>
-    <div id="chart-sessions"></div>
-  </div>
-
-  <div class="card">
-    <div class="kicker">Last twenty-four</div>
-    <h2>Recent 5-hour blocks</h2>
-    <div id="chart-block"></div>
-  </div>
-
-  <div class="card">
-    <header style="margin-bottom:14px">
-      <div><div class="kicker">The same data, read straight</div><h2 style="margin:0">By model</h2></div>
-      <button class="btn" id="toggle-table">show all days</button>
-    </header>
-    <div class="tscroll"><table id="tbl-model"></table></div>
-    <div class="tscroll hidden" id="tbl-day-wrap" style="margin-top:18px"><table id="tbl-day"></table></div>
-  </div>
-
-
-
-  <div class="tiles" id="tiles"></div>
-
-  <p class="sub" id="foot"></p>
 </div>
 <div id="tip"></div>
 <script>
 const $ = s => document.querySelector(s);
 const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-// ---------- one colour per model, fixed ----------
-// Colour follows the model family, never the cost rank, so a model keeps its
-// colour across the 7d/30d/90d ranges and from one day to the next:
-//   Opus = persimmon, Fable = green, Sonnet = blue, Haiku = purple,
-//   Mythos = magenta, anything else = slate.
-// Within a family the newest generation (by first appearance in the index) is
-// drawn at full strength and each earlier one fades a step toward the paper,
-// so "the strong green" is always the current Fable.
-const FAMILY_VAR = { opus: "--s1", fable: "--s4", sonnet: "--s2", haiku: "--s3", mythos: "--s5" };
-const familyOf = m => { const k = (m || "").match(/^claude-([a-z]+)/); return (k && FAMILY_VAR[k[1]]) ? k[1] : "other"; };
-const hex2rgb = h => { const s = h.replace("#", ""); const n = parseInt(s.length === 3 ? s.replace(/./g, c => c + c) : s, 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
-const mixHex = (a, b, t) => { const A = hex2rgb(a), B = hex2rgb(b);
-  return "#" + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, "0")).join(""); };
-function modelColours(u) {
-  const span = u.model_span || {};
-  const paper = cssv("--surface-1") || "#FAF6EF";
-  const byFam = {};
-  Object.keys(span).forEach(m => (byFam[familyOf(m)] = byFam[familyOf(m)] || []).push(m));
-  const map = {};
-  Object.entries(byFam).forEach(([fam, ms]) => {
-    ms.sort((a, b) => (span[a].first || "").localeCompare(span[b].first || "") || a.localeCompare(b));
-    const base = cssv(FAMILY_VAR[fam] || "--s6");
-    ms.forEach((m, i) => { const stepsBack = ms.length - 1 - i;
-      map[m] = mixHex(base, paper, Math.min(0.62, 0.2 * stepsBack)); });
-  });
-  return m => map[m] || cssv(FAMILY_VAR[familyOf(m)] || "--s6");
-}
-const usd = n => n >= 100 ? "$" + n.toFixed(0) : n >= 1 ? "$" + n.toFixed(2) : "$" + n.toFixed(3);
-const num = n => n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M"
-              : n >= 1e3 ? (n/1e3).toFixed(1)+"k" : String(n);
 const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const attrq = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;")
   .replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const dur = s => { if (s == null) return "reset time unknown";
   const h = Math.floor(s/3600), m = Math.floor(s%3600/60);
   return h ? `resets in ${h}h ${m}m` : `resets in ${m}m`; };
-const shortModel = m => m.replace(/^claude-/, "").replace(/-(\d{8})$/, "");
 
 // Charts are drawn at the host's real pixel width, so one SVG unit is one CSS
 // pixel and labels keep their size in a narrow window. A fixed 1000-unit viewBox
 // scaled everything down together and left 4px axis text at phone widths.
 const widthOf = sel => { const el = $(sel), w = el && el.clientWidth; return w > 240 ? w : 1000; };
-const NARROW = 620;   // below this, horizontal bar charts stack the label above the bar
-// Longest label that fits in px pixels of 11px text, with an ellipsis if cut.
-const fitLabel = (s, px) => { const n = Math.max(6, Math.floor(px / 6.4));
-  return s.length > n ? "…" + s.slice(-(n - 1)) : s; };
+const NARROW = 620;   // below this, the window charts switch to their compact layout
 
 $("#theme").onclick = () => {
   const cur = document.documentElement.getAttribute("data-theme");
   const dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme:dark)").matches;
   document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
-  if (STATE.usage) renderCharts(STATE.usage);
   if (STATE.limits) renderMeters(STATE.limits);
 };
 
@@ -956,246 +872,6 @@ function renderMeters(d) {
   wireTips("#meters");
 }
 
-// ---------- stat tiles ----------
-function renderTiles(u) {
-  const t = u.totals, days = Object.keys(u.by_day).sort();
-  const today = (() => { const n = new Date();
-    return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`;
-  })();  // local calendar day, matching the ET day keys from the server
-  const td = u.by_day[today];
-  const perDay = t.cost / Math.max(1, days.length);
-  const cacheRatio = t.cache_read / Math.max(1, t.cache_read + t.input + t.cache_write) * 100;
-  $("#tiles").innerHTML = [
-    ["Notional spend", usd(t.cost), `${days.length} active days tracked`],
-    ["Today", td ? usd(td.cost) : "$0", td ? `${td.calls} calls` : "no calls yet"],
-    ["Per active day", usd(perDay), "average"],
-    ["Cache hit share", cacheRatio.toFixed(1)+"%", `${num(t.cache_read)} tokens read`],
-    ["Output tokens", num(t.output), `${num(t.thinking)} thinking`],
-  ].map(([k,v,n]) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="n">${esc(n)}</div></div>`).join("");
-}
-
-// ---------- stacked bars: spend by day, by model ----------
-let RANGE = 30;  // days shown; "0" means everything on record
-
-function renderRangeCtl(u) {
-  const opts = [[7, "7d"], [30, "30d"], [90, "90d"], [0, "all"]];
-  $("#range-ctl").innerHTML = opts.map(([v, lab]) =>
-    `<button class="btn" data-range="${v}" style="margin-left:6px;${
-      v === RANGE ? "color:var(--text-primary);border-color:var(--text-muted)" : ""}">${lab}</button>`
-  ).join("");
-  $("#range-ctl").querySelectorAll("[data-range]").forEach(btn => {
-    btn.onclick = () => { RANGE = +btn.dataset.range; renderCharts(STATE.usage); };
-  });
-}
-
-// The account's weekly rate-limit windows, per calendar day, next to the local
-// bars. A window that climbed on a day when this Mac holds no calls for the
-// model it is scoped to is work that ran somewhere else (a cloud session), and
-// the day gets a ring above it so the empty bar is not read as an empty day.
-function cloudSignal(u, d) {
-  const lim = u.limit_by_day || {};
-  const rows = [], flags = [];
-  const local = u.by_day_model[d] || {};
-  let sampled = 0;
-  Object.keys(lim).sort().forEach(k => {
-    const w = lim[k]; if (!w || !w.days) return;
-    const v = w.days[d]; if (!v) return;
-    const scopeCalls = w.scope
-      ? Object.keys(local).filter(m => m.toLowerCase().includes(w.scope.toLowerCase()))
-          .reduce((s, m) => s + local[m].calls, 0)
-      : Object.values(local).reduce((s, x) => s + x.calls, 0);
-    const label = w.scope ? `${w.scope}-only window` : "all-models window";
-    const unsampled = Math.max(0, v.rise_pct - v.measured_pct);
-    rows.push([label, `+${v.rise_pct.toFixed(1)}% of week` + (unsampled >= 0.5 ? ` (${unsampled.toFixed(1)} in gaps)` : "")]);
-    if (v.rise_pct >= 1 && scopeCalls === 0) {
-      rows.push(["on this Mac", w.scope ? `0 ${w.scope} calls` : "0 calls"]);
-      flags.push(w.scope ? `${w.scope} work off this Mac` : "work off this Mac");
-    }
-    sampled = Math.max(sampled, v.sampled_hours);
-  });
-  if (rows.length && sampled < 23) rows.push(["sampled", `${sampled} of 24 h`]);
-  return { rows, flags };
-}
-
-function chartDay(u) {
-  renderRangeCtl(u);
-  const all = Object.keys(u.by_day).sort();
-  const days = RANGE ? all.slice(-RANGE) : all;
-  const color = modelColours(u);
-
-  // Stack order and legend follow cost within the visible range; colours do not.
-  const inRange = {};
-  days.forEach(d => Object.entries(u.by_day_model[d] || {}).forEach(([m, v]) => {
-    inRange[m] = (inRange[m] || 0) + v.cost;
-  }));
-  const models = Object.keys(inRange).filter(m => inRange[m] > 0)
-    .sort((x, y) => inRange[y] - inRange[x]);
-  const ink = cssv("--text-primary");
-  const anyCloud = days.some(d => cloudSignal(u, d).flags.length);
-  $("#legend-day").innerHTML = models.map(m =>
-    `<span><i class="sw" style="background:${color(m)}"></i>${esc(shortModel(m))}</span>`).join("")
-    + (anyCloud ? `<span><i class="sw" style="width:9px;height:9px;border-radius:50%;border:1.5px solid ${ink};background:transparent"></i>rate-limit window moved, nothing on this Mac for that model</span>` : "");
-
-  const W = widthOf("#chart-day"), H = W < NARROW ? 200 : 250, PL = 52, PR = 8, PT = 18, PB = 26;
-  const iw = W - PL - PR, ih = H - PT - PB;
-  const max = Math.max(...days.map(d => u.by_day[d].cost), 0.01);
-  const step = iw / days.length, bw = Math.min(38, step * 0.72);
-  let g = "";
-  for (let i = 0; i <= 4; i++) {
-    const y = PT + ih - ih * i / 4;
-    g += `<line class="gl" x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}"/>
-          <text class="ax" x="${PL-8}" y="${y+3.5}" text-anchor="end">${usd(max*i/4)}</text>`;
-  }
-  // One "MM-DD" label needs ~44px; label as many days as the width can carry, never more than 12.
-  const every = Math.max(1, Math.ceil(days.length / Math.max(3, Math.min(12, Math.floor(iw / 44)))));
-  let bars = "", flagged = 0;
-  days.forEach((d, i) => {
-    const x = PL + step * i + (step - bw) / 2;
-    let acc = 0;
-    const parts = models.map(m => {
-      const c = (u.by_day_model[d] && u.by_day_model[d][m]) ? u.by_day_model[d][m].cost : 0;
-      if (c <= 0) return "";
-      const hh = Math.max(1.5, ih * c / max), y = PT + ih - ih * acc / max - hh;
-      acc += c;
-      return `<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(0, hh-2)}" rx="3" fill="${color(m)}"/>`;
-    }).join("");
-    const rows = models.filter(m => u.by_day_model[d] && u.by_day_model[d][m])
-      .map(m => [shortModel(m), usd(u.by_day_model[d][m].cost)]);
-    const src = u.by_day_source[d] || {};
-    Object.keys(src).sort().forEach(s => rows.push([SOURCE_NAMES[s] || s, usd(src[s].cost)]));
-    rows.push(["total on this Mac", usd(u.by_day[d].cost)], ["calls on this Mac", String(u.by_day[d].calls)]);
-    const sig = cloudSignal(u, d);
-    sig.rows.forEach(r => rows.push(r));
-    let ring = "";
-    if (sig.flags.length) {
-      flagged++;
-      const top = PT + ih - ih * acc / max;
-      ring = `<circle cx="${x + bw / 2}" cy="${Math.max(PT - 8, top - 9)}" r="3.2" fill="none" stroke="${ink}" stroke-width="1.5"/>`;
-    }
-    bars += `<g>${parts}${ring}<rect x="${PL+step*i}" y="${PT - 12}" width="${step}" height="${ih + 12}" fill="transparent"
-      data-t="${esc(d + (sig.flags.length ? " · " + sig.flags.join(", ") : ""))}" data-r="${attrq(JSON.stringify(rows))}"/></g>`;
-    // Always label the last day unless it would sit on top of the previous label.
-    if (i % every === 0 || (i === days.length - 1 && i % every > every / 2))
-      bars += `<text class="ax" x="${x+bw/2}" y="${H-8}" text-anchor="middle">${d.slice(5)}</text>`;
-  });
-  $("#chart-day").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Notional spend by day, local transcripts">${g}${bars}</svg>`;
-  const tz = u.timezone || "your local zone";
-  const sampledDays = Object.keys(u.limit_by_day || {}).length
-    ? new Set(Object.values(u.limit_by_day).flatMap(w => Object.keys(w.days || {}))) : new Set();
-  $("#day-note").innerHTML = `Showing ${days.length} of ${all.length} days on record. `
-    + `Bars are built from transcripts on this Mac only: Claude Code CLI and Cowork runs that executed here. `
-    + `Cloud sessions (Cowork in the cloud, Claude Code on the web, cloud scheduled tasks) write nothing to this disk and never appear in these bars. `
-    + (sampledDays.size
-        ? `The account-wide rate-limit windows are sampled every 5 minutes while the server runs; each day's tooltip shows how far they moved that day, and a ring marks a day where a window moved but this Mac holds no calls for its model${flagged ? ` (${flagged} such day${flagged === 1 ? "" : "s"} in this range)` : ""}. `
-        : `Once the server has sampled the rate-limit windows, each day's tooltip will also show how far the account-wide windows moved that day. `)
-    + `Days here are calendar days in ${esc(tz)}, cut at midnight; the allotment view above cuts its days at the weekly reset hour instead, so the two do not share a boundary.`;
-  wireTips("#chart-day");
-}
-
-// ---------- where the usage comes from ----------
-const SOURCE_NAMES = { cowork: "Cowork, local runs", cli: "Claude Code CLI" };
-
-function chartSource(u) {
-  const rows = Object.entries(u.by_source).sort((a, b) => b[1].cost - a[1].cost);
-  if (!rows.length) { $("#chart-source").innerHTML = "<p class=\"sub\">nothing indexed</p>"; return; }
-  const total = rows.reduce((s, [, v]) => s + v.cost, 0) || 1;
-  const W = widthOf("#chart-source"), narrow = W < NARROW;
-  // Wide: label left of the bar. Narrow: label on its own line above it.
-  const rh = narrow ? 52 : 40, PL = narrow ? 0 : 210, PR = 130;
-  const body = rows.map(([name, v], i) => {
-    const y = i * rh + 6, w = Math.max(2, (W - PL - PR) * v.cost / (rows[0][1].cost || 1));
-    const by = narrow ? y + 20 : y + 4;   // bar top
-    const label = fitLabel(SOURCE_NAMES[name] || name, narrow ? W : PL - 12);
-    return `<g>${narrow
-        ? `<text class="dl" x="0" y="${y+12}">${esc(label)}</text>`
-        : `<text class="dl" x="${PL-12}" y="${y+16}" text-anchor="end">${esc(label)}</text>`}
-      <rect x="${PL}" y="${by}" width="${w}" height="18" rx="4" fill="${cssv(i ? "--s2" : "--s1")}"/>
-      <text class="dl" x="${PL+w+10}" y="${by+13}">${usd(v.cost)} · ${(v.cost/total*100).toFixed(0)}%</text>
-      <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
-        data-t="${esc(SOURCE_NAMES[name] || name)}" data-r="${attrq(JSON.stringify([
-          ["notional", usd(v.cost)], ["calls", String(v.calls)],
-          ["output", num(v.output)], ["cache read", num(v.cache_read)]]))}"/></g>`;
-  }).join("");
-  $("#chart-source").innerHTML =
-    `<svg viewBox="0 0 ${W} ${rows.length*rh+10}" role="img" aria-label="Usage by source">${body}</svg>`
-    + `<p style="font-size:11.5px;color:var(--text-muted);margin:14px 0 0;line-height:1.55">
-       "Cowork, local runs" is only what the desktop app executed on this Mac, under
-       <code>~/Library/Application Support/Claude/local-agent-mode-sessions</code>; for many accounts that is
-       mostly scheduled tasks, not the sessions you sit in. Claude Code CLI sessions live under
-       <code>~/.claude/projects</code>. Cloud sessions (Cowork in the cloud, Claude Code on the web, cloud
-       scheduled tasks) run on Anthropic's servers and write nothing here, so they are counted in the
-       account-wide rate-limit meters at the top and cannot appear in these charts.</p>`;
-  wireTips("#chart-source");
-}
-
-// ---------- horizontal bars: spend by project ----------
-function chartProj(u) {
-  const host = $("#chart-proj");
-  const rows = Object.entries(u.by_project).filter(([, v]) => v.calls > 0)
-    .sort((x, y) => y[1].cost - x[1].cost || y[1].calls - x[1].calls).slice(0, 12);
-
-  // Coverage note: a project folder exists only where the CLI was actually run.
-  const dirs = u.project_dirs || [];
-  const empty = dirs.filter(d => d.files === 0);
-  const note = `<p style="font-size:11.5px;color:var(--text-muted);margin:16px 0 0;line-height:1.55">
-    Cowork desktop sessions are one bar: they are stored per session, not per project folder,
-    so there is no project to split them by. The named folders below it are Claude Code CLI,
-    which creates a folder only for a directory you actually ran <code>claude</code> in
-    (${rows.length - 1} of ${dirs.length} such folders have usage${empty.length ? "; empty: " +
-      empty.map(d => `<code>${esc(d.name)}</code>`).join(", ") : ""}).
-    Cloud sessions write nothing to this Mac and appear nowhere in this chart.</p>`;
-
-  if (!rows.length) { host.innerHTML = `<p class="sub">no project usage recorded yet</p>` + note; return; }
-
-  const max = rows[0][1].cost || 1, W = widthOf("#chart-proj"), narrow = W < NARROW;
-  const rh = narrow ? 48 : 34, H = rows.length * rh + 8;
-  const PL = narrow ? 0 : Math.min(250, Math.round(W * 0.3)), PR = 100;
-  const body = rows.map(([name, v], i) => {
-    const y = i * rh + 6, w = Math.max(2, (W - PL - PR) * v.cost / max);
-    const by = narrow ? y + 18 : y + 3;   // bar top
-    const label = fitLabel(name, narrow ? W : PL - 12);
-    return `<g>${narrow
-        ? `<text class="dl" x="0" y="${y+11}">${esc(label)}</text>`
-        : `<text class="dl" x="${PL-12}" y="${y+15}" text-anchor="end">${esc(label)}</text>`}
-      <rect x="${PL}" y="${by}" width="${w}" height="18" rx="4" fill="${cssv("--s1")}"/>
-      <text class="dl" x="${PL+w+10}" y="${by+13}">${v.cost > 0 ? usd(v.cost) : v.calls + " calls"}</text>
-      <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
-        data-t="${esc(name)}" data-r="${attrq(JSON.stringify([
-          ["notional", v.cost > 0 ? usd(v.cost) : "unpriced"],
-          ["calls", String(v.calls) + (v.unpriced_calls ? " (" + v.unpriced_calls + " unpriced)" : "")],
-          ["output", num(v.output)], ["cache read", num(v.cache_read)]]))}"/></g>`;
-  }).join("");
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Notional spend by project">${body}</svg>` + note;
-  wireTips("#chart-proj");
-}
-
-// ---------- recent 5h blocks ----------
-function chartBlock(u) {
-  const b = u.blocks.slice(-24);
-  if (!b.length) { $("#chart-block").innerHTML = "<p class=\"sub\">no blocks yet</p>"; return; }
-  const W = widthOf("#chart-block"), H = W < NARROW ? 150 : 170, PL = 52, PR = 8, PT = 10, PB = 26;
-  const iw = W-PL-PR, ih = H-PT-PB;
-  const max = Math.max(...b.map(x => x.cost), 0.01);
-  const step = iw/b.length, bw = Math.min(34, step*0.68);
-  const every = Math.max(1, Math.ceil(b.length / Math.max(3, Math.floor(iw / 44))));
-  let g = "";
-  for (let i = 0; i <= 3; i++) {
-    const y = PT + ih - ih*i/3;
-    g += `<line class="gl" x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}"/>
-          <text class="ax" x="${PL-8}" y="${y+3.5}" text-anchor="end">${usd(max*i/3)}</text>`;
-  }
-  const bars = b.map((x, i) => {
-    const px = PL + step*i + (step-bw)/2, h = Math.max(1.5, ih*x.cost/max);
-    return `<g><rect x="${px}" y="${PT+ih-h}" width="${bw}" height="${h}" rx="3" fill="${cssv("--s3")}"/>
-      <rect x="${PL+step*i}" y="${PT}" width="${step}" height="${ih}" fill="transparent"
-        data-t="${esc(x.start.slice(0,16).replace("T"," "))}" data-r="${attrq(JSON.stringify([
-          ["notional", usd(x.cost)], ["tokens", num(x.tokens)], ["calls", String(x.calls)]]))}"/>
-      ${i % every === 0 ? `<text class="ax" x="${px+bw/2}" y="${H-8}" text-anchor="middle">${x.start.slice(5,10)}</text>` : ""}</g>`;
-  }).join("");
-  $("#chart-block").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Recent five hour blocks">${g}${bars}</svg>`;
-  wireTips("#chart-block");
-}
-
 function wireTips(sel) {
   $(sel).querySelectorAll("[data-t]").forEach(el => {
     el.style.cursor = "crosshair";
@@ -1204,104 +880,22 @@ function wireTips(sel) {
   });
 }
 
-// ---------- tables (the accessible view of the same data) ----------
-function renderTables(u) {
-  const head = `<tr><th>Model</th><th class="r">Calls</th><th class="r">Output</th>
-    <th class="r">Cache read</th><th class="r">Notional</th></tr>`;
-  $("#tbl-model").innerHTML = head + Object.entries(u.by_model)
-    .sort((a,b) => b[1].cost - a[1].cost).map(([m,v]) =>
-      `<tr><td>${esc(shortModel(m))}</td><td class="r">${v.calls}</td><td class="r">${num(v.output)}</td>
-       <td class="r">${num(v.cache_read)}</td><td class="r">${v.cost > 0 ? usd(v.cost) : "unpriced"}</td></tr>`).join("");
-
-  const dhead = `<tr><th>Day</th><th class="r">Calls</th><th class="r">Output</th>
-    <th class="r">Cache read</th><th class="r">Notional</th></tr>`;
-  $("#tbl-day").innerHTML = dhead + Object.keys(u.by_day).sort().reverse().map(d => {
-    const v = u.by_day[d];
-    return `<tr><td>${d}</td><td class="r">${v.calls}</td><td class="r">${num(v.output)}</td>
-      <td class="r">${num(v.cache_read)}</td><td class="r">${usd(v.cost)}</td></tr>`;
-  }).join("");
-
-  $("#toggle-table").onclick = () => {
-    const t = $("#tbl-day-wrap");
-    t.classList.toggle("hidden");
-    $("#toggle-table").textContent = t.classList.contains("hidden") ? "show all days" : "hide days";
-  };
-}
-
-function fmtDur(s) {
-  if (!s) return "—";
-  const h = Math.floor(s/3600), m = Math.floor(s%3600/60);
-  return h ? `${h}h ${m}m` : `${m}m`;
-}
-
-function chartSessions(u) {
-  const rows = (u.sessions || []).filter(s => s.cost > 0).slice(0, 12);
-  const host = $("#chart-sessions");
-  if (!rows.length) { host.innerHTML = `<p class="sub">no priced sessions yet</p>`; return; }
-  const max = rows[0].cost, W = widthOf("#chart-sessions"), narrow = W < NARROW;
-  const rh = narrow ? 62 : 38, PL = narrow ? 0 : Math.min(300, Math.round(W * 0.32)), PR = 90;
-  const muted = cssv("--text-muted");
-  const body = rows.map((s, i) => {
-    const y = i*rh + 6, w = Math.max(2, (W-PL-PR) * s.cost / max);
-    const label = fitLabel(s.label, narrow ? W : PL - 12);
-    const when = (s.started || "").slice(0, 10);
-    const sub = `${esc(when)} · ${esc(fmtDur(s.duration_seconds))}`;
-    const by = narrow ? y + 32 : y + 6;   // bar top
-    return `<g>${narrow
-        ? `<text class="dl" x="0" y="${y+11}">${esc(label)}</text>
-           <text x="0" y="${y+24}" font-size="10.5" fill="${muted}">${sub}</text>`
-        : `<text class="dl" x="${PL-12}" y="${y+13}" text-anchor="end">${esc(label)}</text>
-           <text x="${PL-12}" y="${y+26}" text-anchor="end" font-size="10.5" fill="${muted}">${sub}</text>`}
-      <rect x="${PL}" y="${by}" width="${w}" height="18" rx="4" fill="${cssv(s.source === "cli" ? "--s2" : "--s1")}"/>
-      <text class="dl" x="${PL+w+10}" y="${by+13}">${usd(s.cost)}</text>
-      <rect x="0" y="${y}" width="${W}" height="${rh-2}" fill="transparent"
-        data-t="${esc(s.label)}" data-r="${attrq(JSON.stringify([
-          ["notional", usd(s.cost)], ["calls", String(s.calls)],
-          ["subagent calls", String(s.subagent_calls)],
-          ["output", num(s.output)], ["cache read", num(s.cache_read)],
-          ["model", s.top_model ? shortModel(s.top_model) : "—"],
-          ["source", s.source], ["duration", fmtDur(s.duration_seconds)]]))}"/></g>`;
-  }).join("");
-  host.innerHTML = `<svg viewBox="0 0 ${W} ${rows.length*rh+10}" role="img"
-      aria-label="Most expensive sessions">${body}</svg>
-    <p style="font-size:11.5px;color:var(--text-muted);margin:14px 0 0;line-height:1.55">
-      One row per session, ranked by notional cost. Calls made by subagents are counted
-      against the session that spawned them. Orange is a local Cowork run, blue is the CLI.
-      Cloud sessions are not on this Mac and cannot be listed here.</p>`;
-  wireTips("#chart-sessions");
-}
-
-function renderCharts(u) { chartDay(u); chartSource(u); chartProj(u); chartSessions(u); chartBlock(u); }
 
 // ---------- boot ----------
 async function load() {
+  // The transcript index is still fetched, for one reason: the work-day pace
+  // model takes its weekday shape from it (dutyWeights). Nothing else on this
+  // page is drawn from it.
   try {
     const u = await (await fetch("/api/usage")).json();
     STATE.usage = u;
-    $("#sub").textContent = `${u.record_count.toLocaleString()} API calls across ${u.day_count} active days`
-      + (u.first_day ? ` · ${u.first_day} to ${u.last_day}` : "")
-      + " · from transcripts on this Mac only (local Cowork runs + Claude Code CLI); cloud sessions show in the meters, not the charts";
-    renderTiles(u); renderCharts(u); renderTables(u); renderPaceCtl();
-    const un = u.unpriced_models.filter(m => m !== "<synthetic>");
+    renderPaceCtl();
     $("#demo-banner").innerHTML = u.demo
       ? `<div class="note" style="border-left-color:var(--good);margin-bottom:14px">
-          <strong>Demo mode.</strong> Project and session names are replaced with stable
-          pseudonyms so this page is safe to screenshot. Every number is real.</div>`
+          <strong>Demo mode.</strong></div>`
       : "";
-    $("#foot").innerHTML = "Notional spend applies published API list prices to your token counts. "
-      + "Your subscription is not billed this way, so read it as a size signal, not an invoice. "
-      + "Cache reads are the bulk of the token volume and are priced at a tenth of input, "
-      + "which is why long agentic sessions dominate these totals."
-      + (un.length ? ` <strong>${un.length} model(s) have no price entry: ${esc(un.join(", "))}. Add them to pricing.json.</strong>` : "")
-      + ` Days are cut in ${esc(u.timezone || "your local zone")}.`
-      + (u.pricing ? ` Prices: ${esc(u.pricing.source || "unknown")}`
-          + (u.pricing.age_hours != null ? `, ${u.pricing.age_hours}h old` : "")
-          + `, ${u.pricing.models || 0} models`
-          + (u.pricing.error ? ` <span style="color:var(--warning)">(${esc(u.pricing.error)})</span>` : "")
-          + "." : "")
-      + ` <a href="/api/export" style="color:var(--s1)">Export everything as JSON</a>.`;
   } catch (e) {
-    $("#sub").textContent = "could not read usage: " + e.message;
+    STATE.usage = null;      // the meters fall back to the 24h clock basis
   }
   try {
     STATE.limits = await (await fetch("/api/limits")).json();
@@ -1320,7 +914,6 @@ addEventListener("resize", () => {
   resizeTimer = setTimeout(() => {
     if (innerWidth === lastW) return;   // height-only changes do not move any chart
     lastW = innerWidth;
-    if (STATE.usage) renderCharts(STATE.usage);
     if (STATE.limits) renderMeters(STATE.limits);
   }, 150);
 });
