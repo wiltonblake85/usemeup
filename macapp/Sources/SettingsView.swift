@@ -13,7 +13,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.radioGroup)
 
-            Text("The icon still turns amber or red for whichever window is worst, so pinning a quiet one cannot hide a busy one.")
+            Text("If another window is worse than this one, the bar switches to it and names it, e.g. \"Fable 88%\", so the colour and the number always describe the same window.")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 

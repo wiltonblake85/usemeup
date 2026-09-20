@@ -25,7 +25,8 @@ struct UseMeUpApp: App {
         MenuBarExtra {
             PanelView().environmentObject(store)
         } label: {
-            // Pinned window owns the number, worst window owns the colour.
+            // One window owns the dot and the number together: the pinned one,
+            // unless another is worse, in which case that one, named.
             HStack(spacing: 3) {
                 Image(nsImage: BarDot.image(store.barSeverity))
                 Text(store.barText)

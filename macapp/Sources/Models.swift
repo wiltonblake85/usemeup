@@ -52,6 +52,16 @@ struct UsageWindow: Codable, Identifiable {
     /// 84.4 and 84.6 are the same fact at menu bar size.
     var shortPct: String { "\(Int(usedPct.rounded()))%" }
 
+    /// The name this window goes by in the menu bar, where every character
+    /// costs width. Only shown when the bar is not on the pinned window.
+    var barName: String {
+        switch key {
+        case "session":    return "5h"
+        case "weekly_all": return "All"
+        default:           return label   // scoped windows are named for their model, e.g. "Fable"
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case key, label, headline, verdict, tone, state, kicker, detail, basis
         case usedPct   = "used_pct"

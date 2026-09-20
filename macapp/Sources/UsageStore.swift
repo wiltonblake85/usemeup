@@ -19,8 +19,9 @@ final class UsageStore: ObservableObject {
     @Published private(set) var lastFetch: Date?
     @Published private(set) var fetchError: String?
 
-    /// Which window owns the number in the bar. The icon still tracks the worst
-    /// window, so pinning a calm one cannot hide a blown one.
+    /// Which window owns the bar while nothing else is worse. A worse window
+    /// takes over the dot and the number together (see `barWindow`), so
+    /// pinning a calm one cannot hide a blown one.
     @AppStorage("pinnedWindow") var pinnedWindow: String = "weekly_all"
 
     static let port = 8787
@@ -50,8 +51,30 @@ final class UsageStore: ObservableObject {
         return windows.max { $0.severity < $1.severity }
     }
 
-    var barText: String { pinned?.shortPct ?? "--" }
-    var barSeverity: Severity { worst?.severity ?? .calm }
+    /// The window the menu bar is describing. The dot and the number must
+    /// always come from the same window: a red dot beside a calm window's 55%
+    /// reads as "55% and in trouble", which is true of neither window. So the
+    /// pinned window owns the bar until another window is strictly worse, and
+    /// then that window takes the whole bar, colour and number together.
+    var barWindow: UsageWindow? {
+        guard let p = pinned else { return worst }
+        if let w = worst, w.severity > p.severity { return w }
+        return p
+    }
+
+    /// True when the bar is showing something other than the pinned window,
+    /// which is exactly when it needs a name in front of the number.
+    var barIsOverride: Bool {
+        guard let b = barWindow, let p = pinned else { return false }
+        return b.key != p.key
+    }
+
+    var barText: String {
+        guard let w = barWindow else { return "--" }
+        let value = w.usedPct >= 100 ? "spent" : w.shortPct
+        return barIsOverride ? "\(w.barName) \(value)" : value
+    }
+    var barSeverity: Severity { barWindow?.severity ?? .calm }
 
     // ---------------------------------------------------------------- lifecycle
 
