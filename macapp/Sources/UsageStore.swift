@@ -19,11 +19,6 @@ final class UsageStore: ObservableObject {
     @Published private(set) var lastFetch: Date?
     @Published private(set) var fetchError: String?
 
-    /// Which window owns the bar while nothing else is worse. A worse window
-    /// takes over the dot and the number together (see `barWindow`), so
-    /// pinning a calm one cannot hide a blown one.
-    @AppStorage("pinnedWindow") var pinnedWindow: String = "weekly_all"
-
     static let port = 8787
     private static var base: String { "http://127.0.0.1:\(port)" }
 
@@ -40,10 +35,6 @@ final class UsageStore: ObservableObject {
 
     var windows: [UsageWindow] { payload?.windows ?? [] }
 
-    var pinned: UsageWindow? {
-        windows.first { $0.key == pinnedWindow } ?? windows.first
-    }
-
     /// The worst window as the SERVER ranked it. Falling back to a local max
     /// only when `worst` is missing keeps one ranking rule in one place.
     var worst: UsageWindow? {
@@ -51,30 +42,35 @@ final class UsageStore: ObservableObject {
         return windows.max { $0.severity < $1.severity }
     }
 
-    /// The window the menu bar is describing. The dot and the number must
-    /// always come from the same window: a red dot beside a calm window's 55%
-    /// reads as "55% and in trouble", which is true of neither window. So the
-    /// pinned window owns the bar until another window is strictly worse, and
-    /// then that window takes the whole bar, colour and number together.
-    var barWindow: UsageWindow? {
-        guard let p = pinned else { return worst }
-        if let w = worst, w.severity > p.severity { return w }
-        return p
+    /// What the menu bar shows, left to right.
+    ///
+    /// Every weekly window is always there, model-scoped ones first. An earlier
+    /// build let the single worst window take the bar over, which hid exactly
+    /// the wrong thing: once a scoped window is nearly spent you stop using
+    /// that model, the question is closed, and the all-models figure is the
+    /// one you now need. It must not be displaced by a window you have already
+    /// acted on.
+    ///
+    /// The 5-hour window (and anything else) joins only while it is amber or
+    /// red. It is noise on a normal day, but when it hits the wall it blocks
+    /// every model at once.
+    var barSegments: [UsageWindow] {
+        let rank: (UsageWindow) -> Int = { w in
+            if w.key.hasPrefix("weekly_scoped") { return 0 }
+            if w.key == "weekly_all" { return 1 }
+            return 2
+        }
+        return windows
+            .filter { $0.alwaysInBar || $0.severity > .calm }
+            .sorted { rank($0) < rank($1) }
     }
 
-    /// True when the bar is showing something other than the pinned window,
-    /// which is exactly when it needs a name in front of the number.
-    var barIsOverride: Bool {
-        guard let b = barWindow, let p = pinned else { return false }
-        return b.key != p.key
+    /// The same thing in words, for VoiceOver and the tooltip.
+    var barSpoken: String {
+        barSegments.isEmpty ? "No reading yet"
+            : barSegments.map { "\($0.label) \($0.barValue)" }
+                .joined(separator: ", ")
     }
-
-    var barText: String {
-        guard let w = barWindow else { return "--" }
-        let value = w.usedPct >= 100 ? "spent" : w.shortPct
-        return barIsOverride ? "\(w.barName) \(value)" : value
-    }
-    var barSeverity: Severity { barWindow?.severity ?? .calm }
 
     // ---------------------------------------------------------------- lifecycle
 

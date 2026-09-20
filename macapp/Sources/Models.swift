@@ -53,14 +53,24 @@ struct UsageWindow: Codable, Identifiable {
     var shortPct: String { "\(Int(usedPct.rounded()))%" }
 
     /// The name this window goes by in the menu bar, where every character
-    /// costs width. Only shown when the bar is not on the pinned window.
+    /// costs width. A model-scoped window is named by its model's initial
+    /// ("Fable" -> "F"); the panel underneath spells everything out.
     var barName: String {
         switch key {
-        case "session":    return "5h"
-        case "weekly_all": return "All"
-        default:           return label   // scoped windows are named for their model, e.g. "Fable"
+        case "session":           return "5h"
+        case "weekly_all":        return "All"
+        case "weekly_oauth_apps": return "Apps"
+        default:                  return label.first.map { String($0).uppercased() } ?? "?"
         }
     }
+
+    /// The figure beside the name, as a percentage. A window at its cap says
+    /// so in a word, because "100%" reads as a number that might still move.
+    var barValue: String { usedPct >= 100 ? "spent" : shortPct }
+
+    /// The weekly windows are the ones a week is planned around, so they are
+    /// always in the bar. Everything else earns its place by being in trouble.
+    var alwaysInBar: Bool { key == "weekly_all" || key.hasPrefix("weekly_scoped") }
 
     enum CodingKeys: String, CodingKey {
         case key, label, headline, verdict, tone, state, kicker, detail, basis

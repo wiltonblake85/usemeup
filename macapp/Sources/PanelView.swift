@@ -86,8 +86,6 @@ private struct WindowRow: View {
     let window: UsageWindow
     let tick: Date
 
-    private var isPinned: Bool { store.pinnedWindow == window.key }
-
     private var support: String {
         [window.kicker, window.detail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
@@ -97,10 +95,6 @@ private struct WindowRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(window.label).font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                if isPinned {
-                    Image(systemName: "pin.fill").font(.system(size: 8))
-                        .foregroundStyle(.tertiary).help("Shown in the menu bar")
-                }
                 Spacer()
                 Text(window.shortPct)
                     .font(.system(size: 17, weight: .semibold, design: .rounded))

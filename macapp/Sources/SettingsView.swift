@@ -8,12 +8,9 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Picker("Show in the menu bar:", selection: $store.pinnedWindow) {
-                ForEach(store.windows) { w in Text(w.label).tag(w.key) }
-            }
-            .pickerStyle(.radioGroup)
+            LabeledContent("Menu bar") { Text(store.barSpoken).foregroundStyle(.secondary) }
 
-            Text("If another window is worse than this one, the bar switches to it and names it, e.g. \"Fable 88%\", so the colour and the number always describe the same window.")
+            Text("Every weekly window is always shown, the model-scoped one first, so a nearly spent model cannot hide what is left for the others. The 5-hour window joins them only while it is amber or red. Each sits on its own green, amber or red background, so it reads the same over any wallpaper.")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
