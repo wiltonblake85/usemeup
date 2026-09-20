@@ -207,7 +207,7 @@ UPSERT = """INSERT INTO calls VALUES (%s)
             WHERE excluded.total > calls.total""" % ",".join("?" * COLUMNS)
 
 
-def record_limit_sample(windows):
+def record_limit_sample(windows, ts=None):
     """Persist one observation per rate-limit window, for burn-rate projection.
 
     A single utilization reading only supports an average-pace guess. Keeping a
@@ -217,10 +217,15 @@ def record_limit_sample(windows):
     The window's display name (e.g. "7-day window, Fable only") is kept in meta
     alongside, because the samples carry only the key and the name is what the
     day chart needs to say which model a window is scoped to.
+
+    ts is when the figures were true, for a source that is not read live (the
+    status line drop file). Filing an old reading under "now" would squeeze
+    whatever was spent since into the wrong interval. The same ts twice is the
+    same row, so re-reading an unchanged file records nothing new.
     """
     if not windows:
         return 0
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now = ts or datetime.datetime.now(datetime.timezone.utc).isoformat()
     rows = [(now, w.get("key"), float(w.get("used_pct") or 0), w.get("resets_at"))
             for w in windows if w.get("key") is not None]
     if not rows:

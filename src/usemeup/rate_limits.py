@@ -2,6 +2,9 @@
 """
 rate_limits.py - the ONLY file in this project that touches a credential or the network.
 
+With USEMEUP_SOURCE=statusline it touches neither: probe() returns what Claude
+Code's own status line handed over (see statusline.py) and nothing below runs.
+
 It does exactly four things:
   1. Reads your Claude Code OAuth token from the macOS Keychain (or ~/.claude/.credentials.json).
   2. Sends it to https://api.anthropic.com and nowhere else.
@@ -18,6 +21,7 @@ escape, read _safe() and the return statements in probe(). That is the whole sur
 import json, os, subprocess, time, urllib.request, urllib.error, datetime
 
 from . import config
+from . import statusline
 
 API_HOST = "https://api.anthropic.com"
 KEYCHAIN_SERVICES = ["Claude Code-credentials", "Claude Code", "claude-code"]
@@ -240,7 +244,28 @@ def _shape_headers(limits):
     return out
 
 
-def probe(allow_ping=False, auto_refresh=None):
+def probe(allow_ping=False, auto_refresh=None, source=None):
+    """Rate-limit state from the configured source. Never contains a credential.
+
+    endpoint    the usage endpoint only (the original behaviour, and the default)
+    statusline  the status line drop file only; no Keychain read, no network
+    auto        the endpoint, and the status line if the endpoint gives nothing.
+                The endpoint goes first because only it has the model-scoped
+                weekly window. A fallback result says so in `fallback_from`.
+    """
+    source = source or config.SOURCE
+    if source == "statusline":
+        return statusline.read()
+    d = _probe_endpoint(allow_ping, auto_refresh)
+    if source == "auto" and not d.get("ok"):
+        alt = statusline.read()
+        if alt.get("ok"):
+            alt["fallback_from"] = {"reason": d.get("reason"), "error": d.get("error")}
+            return alt
+    return d
+
+
+def _probe_endpoint(allow_ping=False, auto_refresh=None):
     """Fetch live rate-limit state. The returned dict never contains a credential.
 
     allow_ping sends a 1-token message as a fallback when the usage endpoint fails.

@@ -14,6 +14,13 @@ Environment variables:
                          expired token. OFF by default because it spends a
                          small number of your tokens. See README.
   USEMEUP_OFFLINE=1      never fetch live prices; use the cache or bundled table
+  USEMEUP_SOURCE         where rate limits come from          (default: endpoint)
+                           endpoint    Keychain token -> api.anthropic.com. Has the
+                                       model-scoped weekly window.
+                           statusline  Claude Code's status line JSON. No credential,
+                                       no network, no model-scoped window. Needs
+                                       `usemeup statusline` set as the status line.
+                           auto        endpoint, falling back to statusline if it fails
   USEMEUP_DB             override the database location
 """
 import datetime
@@ -60,6 +67,11 @@ REFRESH_CWD = os.path.join(DB_DIR, "refresh")
 PORT = int(os.environ.get("USEMEUP_PORT", "8787"))
 DEMO = os.environ.get("USEMEUP_DEMO", "") not in ("", "0", "false", "False")
 AUTO_REFRESH = os.environ.get("USEMEUP_AUTO_REFRESH", "") not in ("", "0", "false", "False")
+SOURCES = ("endpoint", "statusline", "auto")
+SOURCE = (os.environ.get("USEMEUP_SOURCE") or "endpoint").strip().lower()
+if SOURCE not in SOURCES:
+    print("usemeup: unknown USEMEUP_SOURCE %r, using endpoint" % SOURCE, file=sys.stderr)
+    SOURCE = "endpoint"
 # Skip the public pricing fetch and use the cached or bundled table instead.
 OFFLINE = os.environ.get("USEMEUP_OFFLINE", "") not in ("", "0", "false", "False")
 
@@ -177,6 +189,10 @@ def banner():
         lines.append("note: no Cowork transcript folder found; showing Claude Code CLI only.")
     lines.append("sampling rate limits every 5 min while running, so the daily view "
                  "keeps filling with the page closed.")
+    lines.append("rate limits from: %s" % {
+        "endpoint": "usage endpoint (reads the Claude Code token from the Keychain)",
+        "statusline": "Claude Code status line (no credential, no network)",
+        "auto": "usage endpoint, falling back to the Claude Code status line"}[SOURCE])
     lines.append("auto-refresh: %s" % ("ON (will run `claude -p ok` when the token expires)"
                                        if AUTO_REFRESH else
                                        "off (set USEMEUP_AUTO_REFRESH=1 to enable)"))

@@ -9,6 +9,7 @@ cli.py - the usemeup command.
     usemeup daily           a terminal table, no browser needed
     usemeup prices          show the resolved price table and where it came from
     usemeup agent install   keep it running 24/7 as a macOS LaunchAgent
+    usemeup statusline      a Claude Code status line command that records rate limits
 """
 import argparse
 import sys
@@ -129,6 +130,16 @@ def cmd_agent(args):
     return agent.status()
 
 
+def cmd_statusline(args):
+    from . import statusline
+    try:
+        text = sys.stdin.read()
+    except Exception:
+        text = ""
+    print(statusline.capture(text, args.passthrough))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="usemeup",
@@ -164,6 +175,11 @@ def main(argv=None):
     ag.add_argument("--no-auto-refresh", action="store_true",
                     help="do not let the agent renew an expired Claude Code token")
     ag.set_defaults(fn=cmd_agent)
+
+    sl = sub.add_parser("statusline",
+                        help="Claude Code status line command: records rate limits, prints one line")
+    sl.add_argument("--passthrough", help="an existing status line command to keep running")
+    sl.set_defaults(fn=cmd_statusline)
 
     args = ap.parse_args(argv)
     if not args.cmd:

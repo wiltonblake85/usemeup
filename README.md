@@ -202,6 +202,7 @@ only rather than reporting a silently partial total.
 | `agent.py` | writes `~/Library/LaunchAgents/…usemeup.plist`, runs `launchctl` | none | none |
 | `verify.py` | your transcripts, the index | none | none |
 | `rate_limits.py` | macOS Keychain, or `~/.claude/.credentials.json` | api.anthropic.com only | **yes**, in memory |
+| `statusline.py` | stdin from Claude Code, `~/.usemeup/statusline.json` | none | none |
 | `server.py` | the above | binds `127.0.0.1` only | none |
 
 While it runs, `server.py` also probes the rate-limit endpoint on its own every five
@@ -289,6 +290,37 @@ this tool's, and it appears once.
 | `USEMEUP_AUTO_REFRESH=1` | allow the token refresh described above |
 | `USEMEUP_OFFLINE=1` | never fetch live prices; use the cache or bundled table |
 | `USEMEUP_DB` | override the index location |
+| `USEMEUP_SOURCE` | `endpoint` (default), `statusline`, or `auto`. See below |
+
+### Rate limits without a credential
+
+Claude Code hands its status line command a JSON document that, for Pro and Max
+subscribers, includes the 5-hour and 7-day figures
+([docs](https://code.claude.com/docs/en/statusline)). `usemeup statusline` is such
+a command: it saves those two figures to `~/.usemeup/statusline.json` and prints
+`5h 24% · 7d 41%`. With `USEMEUP_SOURCE=statusline` the server reads that file and
+`rate_limits.py` never opens the Keychain or the network.
+
+In `~/.claude/settings.json`:
+
+```json
+{ "statusLine": { "type": "command", "command": "usemeup statusline" } }
+```
+
+Already have a status line? Keep it: `usemeup statusline --passthrough "your command"`
+runs yours on the same input and appends the figures.
+
+What you give up, so you can choose with your eyes open:
+
+- **No model-scoped weekly window.** Only the usage endpoint reports "7-day window,
+  <model> only", and that is often the limit that actually binds.
+- **Only as fresh as your last Claude Code turn on this machine.** Cloud sessions
+  and claude.ai move the real number without moving this one. Each sample is filed
+  under the time it was captured, never under "now", and a reading more than six
+  hours old is refused rather than shown as current.
+
+`USEMEUP_SOURCE=auto` uses the endpoint and falls back to the status line when the
+endpoint gives nothing; the response says so in `fallback_from`.
 
 ---
 

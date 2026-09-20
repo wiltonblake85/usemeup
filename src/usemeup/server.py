@@ -6,7 +6,8 @@ Binds 127.0.0.1, so nothing outside this machine can reach it.
 
   GET /             index.html
   GET /api/usage    aggregates from the local index (no network)
-  GET /api/limits   live rate-limit state (reads Keychain, calls api.anthropic.com)
+  GET /api/limits   live rate-limit state (reads Keychain, calls api.anthropic.com;
+                    or, with USEMEUP_SOURCE=statusline, reads a local file only)
   GET /api/panel    the two weekly burn-up charts, pace already applied
   GET /api/ingest   force a re-scan of the transcript folders
   GET /api/export   everything as one JSON download
@@ -133,7 +134,7 @@ def _limits_unlocked():
     if d.get("ok"):
         _429_streak[0] = 0
         try:
-            store.record_limit_sample(d.get("windows"))
+            store.record_limit_sample(d.get("windows"), ts=d.get("sample_ts"))
         except Exception:
             pass          # sampling is best-effort; never break the panel over it
         _last_good[0] = dict(d)
