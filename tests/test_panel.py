@@ -163,3 +163,72 @@ def test_a_thin_window_with_history_projects_past_the_cap():
     assert built["over_cap"] is True
     assert built["headline"].startswith("runs out around")
     assert "9 days of history" in built["detail"]
+
+
+# ---------------------------------------------------------------- alerts
+
+def _built(used, elapsed_frac, projected_end=None, **over):
+    w = panel.build_window(_window(used, elapsed_frac, projected_end=projected_end), None)
+    w.update(over)
+    return w
+
+
+def test_a_calm_window_raises_nothing():
+    assert panel.alert_for(_built(40, 0.5)) is None
+
+
+def test_amber_is_not_worth_a_notification():
+    w = _built(70, 0.5)
+    assert w["state"] == "watch"
+    assert panel.alert_for(w) is None
+
+
+def test_forecast_to_cross_raises_a_forecast_alert():
+    a = panel.alert_for(_built(60, 0.5, projected_end=120))
+    assert a["kind"] == "forecast"
+    assert a["title"].startswith("All models: ")
+    assert "60% used" in a["body"]
+
+
+def test_a_spent_window_raises_spent_not_forecast():
+    a = panel.alert_for(_built(100, 0.9))
+    assert a["kind"] == "spent"
+    assert a["title"] == "All models is spent"
+
+
+def test_the_id_is_stable_so_a_wobbling_forecast_fires_once():
+    # The same window seen twice, a few minutes apart: usage moved and the
+    # forecast moved. (Reset-time jitter is window_id's job; see test_history.)
+    first = _built(60, 0.5, projected_end=120)
+    later = dict(first, used_pct=64.0, headline="landing near 101% at reset")
+    one, two = panel.alert_for(first), panel.alert_for(later)
+    assert one["title"] != two["title"]
+    assert one["id"] == two["id"]
+
+
+def test_spent_and_forecast_are_separate_events_in_one_window():
+    f = panel.alert_for(_built(60, 0.5, projected_end=120))
+    s = panel.alert_for(_built(100, 0.5))
+    assert f["id"] != s["id"]
+    assert f["id"].rsplit("|", 1)[0] == s["id"].rsplit("|", 1)[0]
+
+
+def test_a_forecast_drawn_only_from_history_is_withheld():
+    # Otherwise an account that usually runs out is told so at every reset.
+    assert panel.alert_for(_built(30, 0.5, projected_end=120, source="history")) is None
+
+
+def test_a_forecast_from_a_window_minutes_old_is_withheld():
+    assert panel.alert_for(_built(6, 0.03, projected_end=200)) is None
+
+
+def test_near_the_limit_is_a_measurement_and_is_never_withheld():
+    a = panel.alert_for(_built(96, 0.03, source="history"))
+    assert a is not None and a["kind"] == "forecast"
+
+
+def test_menubar_payload_carries_alerts():
+    limits = {"ok": True, "windows": [_window(60, 0.5, projected_end=120)]}
+    out = panel.menubar({}, limits)
+    assert [a["kind"] for a in out["alerts"]] == ["forecast"]
+    assert panel.menubar({}, {"ok": False})["alerts"] == []

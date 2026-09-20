@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct UseMeUpApp: App {
@@ -24,7 +25,10 @@ struct UseMeUpApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let presenter = NotificationPresenter()
+
     func applicationDidFinishLaunching(_ n: Notification) {
+        UNUserNotificationCenter.current().delegate = presenter
         UsageStore.shared.start()
     }
 

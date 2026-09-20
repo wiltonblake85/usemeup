@@ -90,9 +90,11 @@ struct MenuBarPayload: Codable {
     let sampleDays: Int?
     let worst: String?
     let windows: [UsageWindow]
+    /// Absent from a server older than the app; treated as none.
+    let alerts: [UsageAlert]?
 
     enum CodingKeys: String, CodingKey {
-        case ok, error, worst, windows
+        case ok, error, worst, windows, alerts
         case checkedAt  = "checked_at"
         case hoursPerDay = "hours_per_day"
         case hoursLabel = "hours_label"

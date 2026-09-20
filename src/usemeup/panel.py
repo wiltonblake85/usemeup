@@ -500,6 +500,7 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
         "now": round(now, 3),
         "y_max": y_max,
         "over_cap": bool(proj_end is not None and proj_end > 100),
+        "elapsed_pct": round(elapsed_pct, 1),
         "resets_at": win.get("resets_at"),
         "reference": _thin(reference),
         "observed": _thin(observed),
@@ -576,6 +577,63 @@ def _severity(w: Dict[str, Any]) -> Tuple[int, float]:
     return (_STATE_RANK.get(w.get("state") or "ok", 0), float(w.get("used_pct") or 0.0))
 
 
+# A forecast made this early in a window is not worth interrupting anyone for.
+# On the clock basis (the 5-hour window, or any window with the work-day model
+# off) ten minutes in at 5% extrapolates to 150%.
+ALERT_MIN_ELAPSED_PCT = 10.0
+
+
+def alert_for(w: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """The one notification this window currently deserves, or None.
+
+    The server decides WHETHER an alert exists and gives it a stable id. The
+    client decides whether it has already shown that id. Keeping delivery
+    state out of the server means an alert raised while no client was running
+    is still shown when one starts, and "once" survives a server restart.
+
+    The id is key + window + kind, so each kind fires at most once per window
+    however often the forecast wobbles back and forth across 100.
+
+    Two kinds:
+
+    spent     the window reached its cap.
+    forecast  the window is red for any other reason: at NEAR_LIMIT_PCT or
+              above, or forecast to cross 100 before it resets.
+
+    A forecast alert is withheld while the forecast is not yet this window's
+    own. With source "history" the slope comes entirely from past windows; on
+    an account that usually runs out, that would fire the moment every window
+    opens, which is a calendar reminder, not news. Being near the limit is a
+    measurement, not a forecast, so it is never withheld.
+    """
+    from . import history          # local: history does not import panel
+    key, used = w.get("key"), float(w.get("used_pct") or 0)
+    wid = history.window_id(w.get("resets_at"))
+    if not key or not wid:
+        return None
+    label = w.get("label") or key
+    reset = _fmt_reset(_parse(w.get("resets_at")))
+    tail = ("Resets %s." % reset) if reset else ""
+
+    if used >= 100:
+        return {"id": "%s|%s|spent" % (key, wid), "kind": "spent",
+                "title": "%s is spent" % label,
+                "body": ("Nothing left until it resets %s." % reset) if reset
+                        else "Nothing left until it resets."}
+
+    if w.get("state") != "alert":
+        return None
+    if used < NEAR_LIMIT_PCT:
+        if w.get("source") == "history":
+            return None
+        if float(w.get("elapsed_pct") or 0) < ALERT_MIN_ELAPSED_PCT:
+            return None
+    headline = w.get("headline") or "close to its limit"
+    return {"id": "%s|%s|forecast" % (key, wid), "kind": "forecast",
+            "title": "%s: %s" % (label, headline),
+            "body": ("%.0f%% used. %s" % (used, tail)).strip()}
+
+
 def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
             priors: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The panel payload with the chart series dropped and a worst-window pick.
@@ -588,12 +646,16 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
     """
     full = build(usage, limits, keys=MENUBAR_KEYS, priors=priors)
     if not full.get("ok"):
-        return {"ok": False, "error": full.get("error"), "windows": [], "worst": None}
-    wins = []
+        return {"ok": False, "error": full.get("error"), "windows": [], "worst": None,
+                "alerts": []}
+    wins, alerts = [], []
     for w in full.get("windows") or []:
         c = {k: w[k] for k in MENUBAR_FIELDS if k in w}
         c["resets_in"] = _resets_in(w.get("resets_at"))
         wins.append(c)
+        a = alert_for(w)
+        if a:
+            alerts.append(a)
     worst = max(wins, key=_severity) if wins else None
     return {
         "ok": True,
@@ -603,4 +665,5 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
         "sample_days": full.get("sample_days"),
         "worst": (worst or {}).get("key"),
         "windows": wins,
+        "alerts": alerts,
     }

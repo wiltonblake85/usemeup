@@ -146,6 +146,7 @@ final class UsageStore: ObservableObject {
             lastFetch = Date()
             fetchError = decoded.ok ? nil : (decoded.error ?? "the server has no rate-limit data")
             if case .failed = link { link = .attached }
+            await Notifier.shared.deliver(decoded.alerts ?? [])
         } catch {
             fetchError = error.localizedDescription
         }

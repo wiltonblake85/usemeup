@@ -32,8 +32,10 @@ usemeup daily        transcript totals as a terminal table
 usemeup prices       the price table behind those totals, and where it came from
 ```
 
-From a clone: `PYTHONPATH=src python3 -m usemeup.cli`. Tests, also stdlib only:
-`PYTHONPATH=src python3 -m unittest discover tests`.
+From a clone: `PYTHONPATH=src python3 -m usemeup.cli`. Tests: `python3 -m pytest tests`
+runs all of them. `PYTHONPATH=src python3 -m unittest discover tests` needs
+nothing installed but skips `test_panel.py` and `test_history.py`, which are
+written as plain functions.
 
 ## Why another usage meter
 
@@ -172,6 +174,25 @@ An earlier build let the single worst window take over the bar. That hid the
 wrong thing. Once Fable is nearly spent I stop using Fable, that question's
 closed, and the all-models figure is the one I need next. It shouldn't be
 pushed out of view by a window I have already acted on.
+
+### One notification per window, not a stream of them
+
+The app tells you once when a window first turns red: the forecast says it will
+hit 100% before it resets, or it has passed 95%. It tells you once more if the
+window is spent. After that it stays quiet about that window however much the
+forecast wobbles, because the server gives each alert an id made of the window
+and the kind, and the app remembers the ids it has shown. An alert raised while
+the app was closed still appears when it opens.
+
+Two forecasts are deliberately not worth a banner. One is a forecast drawn only
+from past weeks: my account usually runs out, so that rule would fire the moment
+every window opened, which is a calendar reminder and not news. The other is a
+forecast made in the first tenth of a window, where ten minutes at 5% reads as
+150%. Passing 95% is a measurement, so neither exception applies to it.
+
+macOS asks for permission the first time there is something to say, not at
+launch. Settings has the switch, the current permission state, and a button
+that sends a test.
 
 Clicking the bar opens a panel with the same headline, verdict and reset
 countdown per window as the page.

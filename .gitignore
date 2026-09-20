@@ -29,3 +29,6 @@ dist/
 
 # macapp build output
 macapp/build/
+
+# Files the Claude desktop app drops here when it shares something in chat
+Claude outputs/
