@@ -14,12 +14,13 @@ Environment variables:
                          expired token. OFF by default because it spends a
                          small number of your tokens. See README.
   USEMEUP_OFFLINE=1      never fetch live prices; use the cache or bundled table
-  USEMEUP_SOURCE         where rate limits come from          (default: endpoint)
-                           endpoint    Keychain token -> api.anthropic.com. Has the
-                                       model-scoped weekly window.
+  USEMEUP_SOURCE         where rate limits come from          (default: statusline)
                            statusline  Claude Code's status line JSON. No credential,
                                        no network, no model-scoped window. Needs
                                        `usemeup statusline` set as the status line.
+                           endpoint    Keychain token -> api.anthropic.com. Has the
+                                       model-scoped weekly window. Opt-in, because it
+                                       reads your Claude Code credential.
                            auto        endpoint, falling back to statusline if it fails
   USEMEUP_DB             override the database location
 """
@@ -68,10 +69,12 @@ PORT = int(os.environ.get("USEMEUP_PORT", "8787"))
 DEMO = os.environ.get("USEMEUP_DEMO", "") not in ("", "0", "false", "False")
 AUTO_REFRESH = os.environ.get("USEMEUP_AUTO_REFRESH", "") not in ("", "0", "false", "False")
 SOURCES = ("endpoint", "statusline", "auto")
-SOURCE = (os.environ.get("USEMEUP_SOURCE") or "endpoint").strip().lower()
+# The default touches no credential. Reading someone's Claude Code token out of
+# their Keychain is a choice they should make, not one a download makes for them.
+SOURCE = (os.environ.get("USEMEUP_SOURCE") or "statusline").strip().lower()
 if SOURCE not in SOURCES:
-    print("usemeup: unknown USEMEUP_SOURCE %r, using endpoint" % SOURCE, file=sys.stderr)
-    SOURCE = "endpoint"
+    print("usemeup: unknown USEMEUP_SOURCE %r, using statusline" % SOURCE, file=sys.stderr)
+    SOURCE = "statusline"
 # Skip the public pricing fetch and use the cached or bundled table instead.
 OFFLINE = os.environ.get("USEMEUP_OFFLINE", "") not in ("", "0", "false", "False")
 

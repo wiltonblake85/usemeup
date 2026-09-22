@@ -53,6 +53,18 @@ NAMES = {"session": "5-hour session window", "weekly_all": "7-day window, all mo
 SECONDS = {"session": 5 * 3600, "weekly_all": 7 * 86400}
 
 
+def command():
+    """The status line command that works for THIS install.
+
+    From the app bundle there is no `usemeup` on PATH, so the instruction has
+    to name the bundled executable, or it tells people to run something that
+    does not exist.
+    """
+    if getattr(sys, "frozen", False):
+        return '"%s" statusline' % sys.executable
+    return "usemeup statusline"
+
+
 def _now():
     return datetime.datetime.now(datetime.timezone.utc)
 
@@ -171,8 +183,9 @@ def read(path=None, now=None, max_age=MAX_AGE):
         raw = body.get("windows") or {}
     except FileNotFoundError:
         base.update({"reason": "no_statusline",
-                     "error": "No status line reading yet. Set `usemeup statusline` as the "
-                              "Claude Code status line command, then send one message."})
+                     "error": "No status line reading yet. In ~/.claude/settings.json set "
+                              "\"statusLine\": {\"type\": \"command\", \"command\": %s}, "
+                              "then send one message in Claude Code." % json.dumps(command())})
         return base
     except Exception as e:
         base.update({"reason": "no_statusline",

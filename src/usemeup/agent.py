@@ -77,7 +77,7 @@ def build_plist(auto_refresh=True, port=None):
         env["USEMEUP_AUTO_REFRESH"] = "1"
     if port or os.environ.get("USEMEUP_PORT"):
         env["USEMEUP_PORT"] = str(port or os.environ["USEMEUP_PORT"])
-    for k in ("USEMEUP_TZ", "USEMEUP_DB", "USEMEUP_OFFLINE", "USEMEUP_DEMO"):
+    for k in ("USEMEUP_TZ", "USEMEUP_DB", "USEMEUP_OFFLINE", "USEMEUP_DEMO", "USEMEUP_SOURCE"):
         if os.environ.get(k):
             env[k] = os.environ[k]
     return {

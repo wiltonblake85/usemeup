@@ -4,9 +4,10 @@ Will your Claude subscription last until the reset? UseMeUp answers that for eac
 rate-limit window, on a local page and in the macOS menu bar, and it measures
 your pace against the hours you actually work instead of a 24-hour clock.
 
-Everything runs on your machine. The only network call it makes on your behalf is
-to `api.anthropic.com`, to ask what your windows look like, and there is a mode
-that doesn't even do that.
+Everything runs on your machine. By default it reads the limits Claude Code
+already hands its status line: no credential, no network call. An opt-in mode
+asks `api.anthropic.com` directly, which costs a Keychain read and buys the
+per-model weekly window.
 
 ```
 uvx --from git+https://github.com/wiltonblake85/usemeup usemeup
@@ -247,28 +248,42 @@ Transom, my notch app, reads this file for its limits section.
 
 ## Where the numbers come from
 
-There are two sources, chosen with `USEMEUP_SOURCE`.
+There are two sources, chosen with `USEMEUP_SOURCE`. The default touches no
+credential at all.
 
-### `endpoint`, the default
+### `statusline`, the default
 
-`rate_limits.py` reads your Claude Code OAuth token
-from the macOS Keychain (or `~/.claude/.credentials.json`), sends it to
-`https://api.anthropic.com/api/oauth/usage` and nowhere else, keeps the limit
-figures, and discards the token. This is the only source that reports the
-model-scoped weekly window.
-
-### `statusline`
-
-Claude Code hands its status line command a JSON document that,
-for Pro and Max subscribers, includes the 5-hour and 7-day figures
+Claude Code hands its status line command a JSON document that, for Pro and Max
+subscribers, includes the 5-hour and 7-day figures
 ([docs](https://code.claude.com/docs/en/statusline)). `usemeup statusline` is
 such a command. It saves those figures to `~/.usemeup/statusline.json` and prints
-`5h 24% · 7d 41%`. In this mode the server reads that file, and `rate_limits.py`
-never opens the Keychain or the network. In `~/.claude/settings.json`:
+`5h 24% · 7d 41%`. The server reads that file, and `rate_limits.py` never opens
+the Keychain or the network. Add one line to `~/.claude/settings.json`:
 
 ```json
 { "statusLine": { "type": "command", "command": "usemeup statusline" } }
 ```
+
+With the menu bar app and no Python install, the command is the one bundled
+inside the app:
+
+```json
+{ "statusLine": { "type": "command",
+  "command": "/Applications/UseMeUp.app/Contents/Resources/server/usemeup-server statusline" } }
+```
+
+Until a reading arrives, the page says which of the two to use, since it knows
+how it was installed.
+
+### `endpoint`, opt-in
+
+With `USEMEUP_SOURCE=endpoint`, `rate_limits.py` reads your Claude Code OAuth
+token from the macOS Keychain (or `~/.claude/.credentials.json`), sends it to
+`https://api.anthropic.com/api/oauth/usage` and nowhere else, keeps the limit
+figures, and discards the token. This is the only source that reports the
+model-scoped weekly window, which is why I run it on my own Mac. It is not the
+default because a tool you downloaded should not read your credential unless you
+tell it to.
 
 Already have a status line? `usemeup statusline --passthrough "your command"`
 runs yours on the same input and appends the figures.
@@ -287,7 +302,7 @@ costs you:
   than six hours old is refused instead of being shown as current.
 
 `auto` uses the endpoint and falls back to the status line when the endpoint
-gives nothing. The response says so in `fallback_from`.
+gives nothing, so it reads the credential too. The response says so in `fallback_from`.
 
 ## What each file touches
 
@@ -309,9 +324,9 @@ gives nothing. The response says so in `fallback_from`.
 cached or returned, and everything the module returns passes through `_safe()`
 first. It is read-only on your credential: it never writes to the Keychain and
 never uses the refresh token, so it can't rotate or invalidate your Claude Code
-login. On first run macOS asks whether Python may read the Claude Code
-credential. That prompt is the Keychain's. Deny it and the page has nothing to
-show, which is the case `USEMEUP_SOURCE=statusline` exists for.
+login. It runs only with `USEMEUP_SOURCE=endpoint` or `auto`. The first time it
+does, macOS asks whether it may read the Claude Code credential. That prompt is
+the Keychain's, and denying it leaves the status line source as the way in.
 
 `pricing.py` does a plain GET of a public price list. Nothing about you is sent,
 and `USEMEUP_OFFLINE=1` turns it off.
@@ -357,7 +372,7 @@ refresh it. It only reads local state.)
 | Variable | Effect |
 |---|---|
 | `USEMEUP_PORT` | server port (default 8787) |
-| `USEMEUP_SOURCE` | `endpoint` (default), `statusline` or `auto` |
+| `USEMEUP_SOURCE` | `statusline` (default), `endpoint` or `auto` |
 | `USEMEUP_AUTO_REFRESH=1` | allow the token refresh described above |
 | `USEMEUP_TZ` | IANA zone for day bucketing (default: your system zone) |
 | `USEMEUP_DB` | override the database location |
