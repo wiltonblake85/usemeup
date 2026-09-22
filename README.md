@@ -201,14 +201,21 @@ countdown per window as the page.
 ./macapp/build.sh              build, install to /Applications, start at login
 ./macapp/build.sh --swift      recompile the Swift only
 ./macapp/build.sh --no-install leave it in macapp/build/
+./macapp/release.sh            Developer ID, notarized, stapled, in a notarized DMG
 ```
 
 The build bundles the Python server with PyInstaller, so the app runs on a Mac
 with no Python setup. If a UseMeUp server is already listening on port 8787 the
 app joins it; otherwise it starts its bundled one and stops it again on quit.
-Building needs the Xcode command line tools and a Homebrew `python3.12`. The app
-is Apple silicon only and ad-hoc signed for now, which is fine on the Mac that
-built it and not yet fit to hand to someone else.
+Building needs the Xcode command line tools and a Homebrew `python3.12`.
+
+`build.sh` signs ad-hoc, which is enough on the Mac that built it. `release.sh`
+is for handing it to anyone else: it re-signs every binary inside the bundle
+with a Developer ID and the hardened runtime (PyInstaller leaves about sixty of
+them, and notarization rejects the bundle if any one is unsigned), notarizes
+and staples the app, then does the same for the DMG. The result opens on a
+fresh Mac with no Gatekeeper warning. It is Apple silicon only, because the
+bundled server is built from an arm64 Python.
 
 ## Advice, when a window needs it
 
