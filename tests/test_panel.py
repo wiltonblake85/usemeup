@@ -232,3 +232,54 @@ def test_menubar_payload_carries_alerts():
     out = panel.menubar({}, limits)
     assert [a["kind"] for a in out["alerts"]] == ["forecast"]
     assert panel.menubar({}, {"ok": False})["alerts"] == []
+
+
+# ---------------------------------------------------------------- advice
+
+def test_green_windows_get_no_advice():
+    assert panel.advice_for("weekly_all", 40, "ok", 1.0, 30, 10, "Tue") is None
+
+
+def test_the_budget_lands_exactly_at_100():
+    # 60 left over 30 working hours is 2%/h, 20% a working day, against 30 now.
+    a = panel.advice_for("weekly_all", 40, "alert", 3.0, 30, 10, "Tue")
+    assert a == "To last until reset, keep it under 20% a working day (the current pace is 30%)."
+
+
+def test_small_budgets_keep_a_decimal():
+    a = panel.advice_for("weekly_all", 90, "alert", 1.0, 20, 10, "Tue")
+    assert "under 5.0% a working day" in a
+
+
+def test_clock_windows_budget_by_the_hour():
+    a = panel.advice_for("session", 70, "alert", 20.0, 2, None, None)
+    assert "under 15% an hour" in a and "current pace is 20%" in a
+
+
+def test_only_the_scoped_window_offers_another_model():
+    assert "another model" in panel.advice_for("weekly_scoped", 70, "alert", 3.0, 20, 10, "Tue")
+    assert "another model" not in panel.advice_for("weekly_all", 70, "alert", 3.0, 20, 10, "Tue")
+
+
+def test_a_spent_scoped_window_says_where_to_go_and_what_it_costs():
+    a = panel.advice_for("weekly_scoped", 100, "alert", None, 20, 10, "Tuesday 8:00 PM")
+    assert a.startswith("Move work to another model until it resets Tuesday 8:00 PM")
+    assert "all models" in a
+    assert panel.advice_for("weekly_all", 100, "alert", None, 20, 10, "Tue") is None
+
+
+def test_already_inside_the_budget_is_not_advised():
+    # Amber on the verdict, but the arithmetic already lands under 100.
+    assert panel.advice_for("weekly_all", 50, "watch", 0.5, 60, 10, "Tue") is None
+
+
+def test_the_last_half_hour_gets_no_budget():
+    assert panel.advice_for("session", 90, "alert", 30.0, 0.3, None, None) is None
+
+
+def test_built_windows_carry_advice_and_the_menubar_passes_it_on():
+    w = panel.build_window(_window(60, 0.5, projected_end=120), None)
+    assert w["advice"] and "an hour" in w["advice"]
+    out = panel.menubar({}, {"ok": True, "windows": [_window(60, 0.5, projected_end=120)]})
+    assert out["windows"][0]["advice"] == w["advice"]
+    assert w["advice"] in out["alerts"][0]["body"]

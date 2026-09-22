@@ -12,6 +12,9 @@ Binds 127.0.0.1, so nothing outside this machine can reach it.
   GET /api/ingest   force a re-scan of the transcript folders
   GET /api/export   everything as one JSON download
 
+It also keeps ~/.usemeup/status.json current (see status.py) for readers that
+would rather open a file than call this server.
+
 While the server runs it also samples the rate-limit windows itself, once every
 SAMPLE_EVERY seconds, so the daily view is not blind whenever the page is closed.
 It goes through the same cache, TTL and 429 back-off as the page, so the total
@@ -38,6 +41,7 @@ from . import history
 from . import panel
 from . import parse_usage
 from . import rate_limits
+from . import status
 from . import store
 
 PORT = config.PORT
@@ -168,6 +172,19 @@ def _limits_unlocked():
 SAMPLE_EVERY = TTL_LIMITS    # one probe per cache lifetime; never more than the page alone
 
 
+def _write_status():
+    """Rewrite ~/.usemeup/status.json from the caches the page already uses.
+
+    Best-effort: a status file that cannot be written must never stop the
+    sampler, and the error is kept where /api/limits can show it.
+    """
+    try:
+        status.write(status.build(_usage(), _limits(), _priors()))
+        _cache["status_error"] = None
+    except Exception as e:
+        _cache["status_error"] = "%s: %s" % (type(e).__name__, e)
+
+
 def _sampler():
     """Keep the sample history and the transcript index filling while the page is closed.
 
@@ -177,6 +194,7 @@ def _sampler():
     _maybe_ingest() has its own TTL and skips unchanged files, so calling it
     here keeps the index fresh at no real cost.
     """
+    _write_status()           # at start, so a reader is not blind for five minutes
     while True:
         time.sleep(SAMPLE_EVERY)
         try:
@@ -187,6 +205,7 @@ def _sampler():
             _limits()
         except Exception:
             pass
+        _write_status()
 
 
 def start_sampler():

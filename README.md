@@ -210,6 +210,34 @@ Building needs the Xcode command line tools and a Homebrew `python3.12`. The app
 is Apple silicon only and ad-hoc signed for now, which is fine on the Mac that
 built it and not yet fit to hand to someone else.
 
+## Advice, when a window needs it
+
+A red or amber window also gets one sentence on what change lands it at exactly
+100% by reset: *To last until reset, keep it under 4.1% a working day (the
+current pace is 11%).* The budget is the headroom left, spread over the working
+hours left before the reset, and the current pace is quoted on the same basis
+so you can see how big the cut is. A model-scoped window adds that the rest can
+go to another model, and once it is spent it says so outright, with the catch:
+that work still counts against all models. A green window gets no advice, and
+neither does an amber one whose arithmetic already lands under 100.
+
+It appears on the page, in the menu bar panel, and in the notification body.
+
+## The status file
+
+`~/.usemeup/status.json` holds the whole picture for anything that would rather
+open a file than call the server: every window with its headline, advice, verdict
+and chart series, plus the current alerts. The server rewrites it every five
+minutes and once at start, atomically, so a reader never sees half a file.
+
+It also says how long it can be trusted. `checked_at` is when the figures were
+last true and `fresh_for_seconds` (45 minutes) is how old that may get before a
+reader should stop showing them. The rule lives in the file so every reader goes
+blank at the same moment instead of each inventing its own. `status.is_fresh()`
+is the reference implementation.
+
+Transom, my notch app, reads this file for its limits section.
+
 ## Where the numbers come from
 
 There are two sources, chosen with `USEMEUP_SOURCE`.

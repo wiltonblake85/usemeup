@@ -385,6 +385,55 @@ def _fmt_reset(epoch: Optional[float]) -> Optional[str]:
     return "%s %s" % (d.strftime("%A"), hour)
 
 
+def _pct(v: float) -> str:
+    """A budget figure, precise where it is small enough for a decimal to matter."""
+    return ("%.0f%%" % v) if v >= 10 else ("%.1f%%" % v)
+
+
+def advice_for(key: str, used: float, state: str, rate: Optional[float],
+               hours_left: Optional[float], per_day: Optional[float],
+               reset: Optional[str]) -> Optional[str]:
+    """One sentence on what change lands this window at 100% by reset, or None.
+
+    The budget is the headroom spread over the time that will actually be
+    spent working before the reset: working hours on the work-day basis, wall
+    hours on the clock. It is set beside the current rate on the same basis,
+    because "keep it under 4% a working day" means nothing until you know you
+    are doing 11.
+
+    Only for windows that are not green. Advice nobody needs is noise, and it
+    trains people to skip the line that matters on the day it does.
+
+    A model-scoped window has a way out the all-models window does not: the
+    same work on another model. It is offered, with its cost stated, because
+    moving work off a scoped model still spends the all-models window.
+    """
+    scoped = key.startswith("weekly_scoped")
+    if used >= 100:
+        if scoped:
+            return "Move work to another model until it resets%s. It still counts toward all models." % (
+                (" " + reset) if reset else "")
+        return None
+    if state == "ok" or not hours_left or hours_left <= 0.5:
+        return None
+    budget_h = (100.0 - used) / hours_left
+    if per_day:
+        budget, unit = budget_h * per_day, "a working day"
+        now = rate * per_day if rate else None
+    else:
+        budget, unit = budget_h, "an hour"
+        now = rate
+    if now is not None and now <= budget:
+        return None      # already inside the budget; the verdict says ahead of pace, the maths says fine
+    text = "To last until reset, keep it under %s %s" % (_pct(budget), unit)
+    if now:
+        text += " (the current pace is %s)" % _pct(now)
+    text += "."
+    if scoped:
+        text += " Or move the rest to another model."
+    return text
+
+
 def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
                  prior: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     p = win.get("projection") or {}
@@ -482,15 +531,26 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
     else:
         bits.append("burning %.2f%% per hour" % float(p.get("rate_pct_per_hour") or 0.0))
 
+    state = chart_state(used, gap, bool(
+        (proj_end is not None and proj_end > 100) or exhausted is not None))
+    if b["on"]:
+        hours_left = (b.get("active_hours") or 0) * max(0.0, 1.0 - b["d_now"])
+        per_day, rate = (weights or {}).get("hours_per_day"), b.get("rate_per_active_hour")
+    else:
+        hours_left = ris / 3600.0
+        per_day, rate = None, float(p.get("rate_pct_per_hour") or 0.0) or None
+    advice = advice_for(win.get("key") or "", used, state, rate, hours_left, per_day,
+                        _fmt_reset(t1))
+
     return {
         "key": win.get("key"),
         "headline": headline,
+        "advice": advice,
         "label": PANEL_LABELS.get(win.get("key"), win.get("name") or win.get("key")),
         "used_pct": used,
         "verdict": verdict,
         "tone": tone,
-        "state": chart_state(used, gap, bool(
-            (proj_end is not None and proj_end > 100) or exhausted is not None)),
+        "state": state,
         "source": b.get("basis") if b["on"] else "clock",
         "kicker": kicker,
         "detail": " · ".join(bits),
@@ -550,7 +610,7 @@ def build(usage: Dict[str, Any], limits: Dict[str, Any],
 MENUBAR_KEYS = ("session", "weekly_all", "weekly_scoped")
 
 # Everything build_window returns except the three plotted series.
-MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "verdict", "tone",
+MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "advice", "verdict", "tone",
                   "state", "source", "kicker", "detail", "basis", "resets_at",
                   "over_cap")
 
@@ -618,8 +678,8 @@ def alert_for(w: Dict[str, Any]) -> Optional[Dict[str, str]]:
     if used >= 100:
         return {"id": "%s|%s|spent" % (key, wid), "kind": "spent",
                 "title": "%s is spent" % label,
-                "body": ("Nothing left until it resets %s." % reset) if reset
-                        else "Nothing left until it resets."}
+                "body": w.get("advice") or (("Nothing left until it resets %s." % reset)
+                                             if reset else "Nothing left until it resets.")}
 
     if w.get("state") != "alert":
         return None
@@ -631,7 +691,7 @@ def alert_for(w: Dict[str, Any]) -> Optional[Dict[str, str]]:
     headline = w.get("headline") or "close to its limit"
     return {"id": "%s|%s|forecast" % (key, wid), "kind": "forecast",
             "title": "%s: %s" % (label, headline),
-            "body": ("%.0f%% used. %s" % (used, tail)).strip()}
+            "body": ("%.0f%% used. %s %s" % (used, tail, w.get("advice") or "")).strip()}
 
 
 def menubar(usage: Dict[str, Any], limits: Dict[str, Any],

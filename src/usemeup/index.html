@@ -659,10 +659,19 @@ function paceLine(w) {
       ${w.used_pct}% used, <span style="color:var(${tone})">${verdict}</span></div>
     ${bits.length ? `<div style="font-size:13px;line-height:1.6;color:var(--text-secondary);margin-top:6px">
       ${bits.join(" · ")}</div>` : ""}
+    ${adviceOf(w) ? `<div style="font-size:13px;line-height:1.5;font-weight:600;color:var(--text-primary);
+      margin-top:10px;padding:8px 10px;border-left:3px solid var(${tone});background:var(--surface-2, transparent)">
+      ${esc(adviceOf(w))}</div>` : ""}
     ${note ? `<div style="font-size:11px;line-height:1.6;color:var(--text-muted);margin-top:6px">
       ${note}</div>` : ""}
   </div>`;
 }
+
+// What change lands this window at 100% by reset. Computed by the server
+// (panel.advice_for), always on the work-day basis where it has one, and the
+// sentence names its own unit, so it reads the same whichever basis the
+// toggle above is showing.
+const adviceOf = w => (STATE.advice || {})[w.key] || "";
 
 
 // A burn-up chart: consumption against the clock, over one window.
@@ -899,6 +908,10 @@ async function load() {
   }
   try {
     STATE.limits = await (await fetch("/api/limits")).json();
+    try {
+      const mb = await (await fetch("/api/menubar")).json();
+      STATE.advice = Object.fromEntries((mb.windows || []).filter(w => w.advice).map(w => [w.key, w.advice]));
+    } catch (e) { STATE.advice = {}; }
     renderMeters(STATE.limits);
   } catch (e) {
     renderMeters({ok: false, error: e.message, windows: []});

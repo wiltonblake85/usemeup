@@ -113,6 +113,13 @@ private struct WindowRow: View {
                 .foregroundStyle(window.severity == .calm ? Color.primary : window.severity.color)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if let a = window.advice, !a.isEmpty {
+                Text(a)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Text(window.verdict.sentenceCased)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
 

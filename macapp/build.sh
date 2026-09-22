@@ -46,8 +46,8 @@ if [ "$SWIFT_ONLY" -eq 0 ]; then
   # Every import in cli.py is lazy and inside a function, so PyInstaller's
   # static scan finds almost nothing. Name the modules explicitly.
   HIDDEN=()
-  for m in agent burn cli config coverage daily panel parse_usage pricing \
-           rate_limits server store verify; do
+  for m in agent burn cli config coverage daily history panel parse_usage pricing \
+           rate_limits server status statusline store verify; do
     HIDDEN+=(--hidden-import "usemeup.$m")
   done
 

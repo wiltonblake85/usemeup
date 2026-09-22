@@ -24,6 +24,8 @@ struct UsageWindow: Codable, Identifiable {
     let usedPct: Double
     /// Where this window ends up: the answer, not the slope.
     let headline: String
+    /// What change lands this window at 100% by reset. Absent while it is green.
+    let advice: String?
     let verdict: String
     let tone: String
     let state: String
@@ -73,7 +75,7 @@ struct UsageWindow: Codable, Identifiable {
     var alwaysInBar: Bool { key == "weekly_all" || key.hasPrefix("weekly_scoped") }
 
     enum CodingKeys: String, CodingKey {
-        case key, label, headline, verdict, tone, state, kicker, detail, basis
+        case key, label, headline, advice, verdict, tone, state, kicker, detail, basis
         case usedPct   = "used_pct"
         case resetsAt  = "resets_at"
         case overCap   = "over_cap"
