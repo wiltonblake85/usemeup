@@ -147,12 +147,21 @@ def typical_full_window(samples, window_seconds, exclude_id=None):
         return None
 
     per_day = rise / days
+    # The most recent window apart from the one being projected. The average
+    # above describes every week on record equally, so it cannot see a habit
+    # that just stopped: a model nobody has touched for a whole week still
+    # averages out to "you usually run out". pace_basis reads these two to
+    # notice that, and `last_coverage` keeps a window the sampler only caught
+    # the tail of from passing as a quiet week.
+    last = ws[-1]
     return {
         "expected_end": per_day * (window_seconds / 86400.0),
         "per_day": per_day,
         "days_observed": days,
         "windows_seen": len(ws),
         "capped_windows": sum(1 for w in ws if w["peak"] >= 100),
+        "last_rise": last["rise"],
+        "last_coverage": min(1.0, last["sampled_seconds"] / float(window_seconds)),
     }
 
 

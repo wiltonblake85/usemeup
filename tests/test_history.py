@@ -98,3 +98,14 @@ def test_same_window_rejects_genuinely_adjacent_windows():
 def test_same_window_is_false_on_missing_values():
     assert not history.same_window(None, R1)
     assert not history.same_window(R1, "not a timestamp")
+
+
+def test_the_most_recent_window_is_reported_on_its_own():
+    """A heavy week followed by an untouched one. The average still says the
+    account runs this window hard; last_rise is what shows the habit stopped."""
+    samples = ([_s(h, min(100.0, h), R1) for h in range(0, 169, 12)]
+               + [_s(h, 0.0, R2) for h in range(170, 337, 12)])
+    t = history.typical_full_window(samples, 7 * 86400)
+    assert t["expected_end"] > 40
+    assert t["last_rise"] == 0.0
+    assert t["last_coverage"] > 0.9

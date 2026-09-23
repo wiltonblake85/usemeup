@@ -263,6 +263,47 @@ def blend_slope(observed: Optional[float], prior_end: Optional[float],
     return None, "none"
 
 
+# An unused window. Below IDLE_USED_PCT nothing measurable has been spent (the
+# endpoint reports whole percents, so this is a reading of 0). IDLE_EXPECTED_PTS
+# is how much history must have expected by now before a zero counts as
+# evidence rather than an early morning: about two working hours of a week on
+# this account, and far more than the jitter of a single reading.
+IDLE_USED_PCT = 1.0
+IDLE_EXPECTED_PTS = 3.0
+# How much of the previous window the sampler must have seen before its
+# silence counts. A window caught only in its last hours proves nothing.
+IDLE_LAST_COVERAGE = 0.5
+
+
+def idle_window(used: float, d_now: float, prior: Optional[Dict[str, Any]]) -> bool:
+    """Has this window gone unused long enough that history no longer applies?
+
+    Found on 2026-09-23. The Fable-only window sat at 0% a day into the week
+    and the panel said "landing near 78% at reset", because every week on
+    record was one where Fable ran out and the blend still gave history 80% of
+    the weight. The user had stopped using Fable. A forecast built from a habit
+    that has ended is not a forecast.
+
+    Two ways a zero outweighs history:
+
+    - This window. History says a certain amount should be gone by now and none
+      of it is. At IDLE_EXPECTED_PTS that is no longer an early start.
+    - The previous window. If the last full window also went unused, the next
+      one is expected to as well, from the moment it opens, instead of
+      forecasting a run-out every reset night until the working day begins.
+
+    Only a true zero qualifies. Once anything is spent the window is in use and
+    the ordinary blend takes over, so this never hides consumption.
+    """
+    if used >= IDLE_USED_PCT or not prior or not prior.get("expected_end"):
+        return False
+    if prior["expected_end"] * d_now >= IDLE_EXPECTED_PTS:
+        return True
+    last_rise, last_cov = prior.get("last_rise"), prior.get("last_coverage")
+    return (last_rise is not None and last_cov is not None
+            and last_rise < IDLE_USED_PCT and last_cov >= IDLE_LAST_COVERAGE)
+
+
 def pace_basis(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
                prior: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """{'on': False} means the caller should fall back to the wall clock.
@@ -310,6 +351,11 @@ def pace_basis(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
     # when there is no history either the projection says so instead of
     # inventing a number.
     slope, basis = blend_slope(observed, (prior or {}).get("expected_end"), span)
+    # A slope of zero from nothing is the failure described above. A slope of
+    # zero from a window that history expected to be moving by now, and is not,
+    # is a measurement.
+    if idle_window(used, d_now, prior):
+        slope, basis = 0.0, "idle"
 
     if slope is None:
         end = exhausted = None
@@ -455,6 +501,11 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
         # which is arithmetically true and reads as reassurance to someone who
         # is, in fact, out. chart_state already carves out 100; so does this.
         verdict, consequence, tone = "spent", "", "critical"
+    elif b["on"] and b["basis"] == "idle":
+        # "Well under pace, most of this window will expire unused" is true of
+        # a window nobody is using and says nothing. Pace describes a rate of
+        # use; there is none.
+        verdict, consequence, tone = "not in use", "", "neutral"
     else:
         verdict, consequence, tone = verdict_for(gap)
 
@@ -518,6 +569,10 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
     if used >= 100:
         # No burn rate: it describes a future this window does not have.
         pass
+    elif b["on"] and b["basis"] == "idle":
+        # No burn rate: 0.00% per working hour is noise. Say why past weeks,
+        # which the other windows cite, are not being used here.
+        bits.append("nothing used this window, so past weeks are left out of the forecast")
     elif b["on"]:
         if b["rate_per_active_hour"] is not None:
             bits.append("burning %.2f%% per working hour" % b["rate_per_active_hour"])

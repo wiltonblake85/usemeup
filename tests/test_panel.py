@@ -283,3 +283,64 @@ def test_built_windows_carry_advice_and_the_menubar_passes_it_on():
     out = panel.menubar({}, {"ok": True, "windows": [_window(60, 0.5, projected_end=120)]})
     assert out["windows"][0]["advice"] == w["advice"]
     assert w["advice"] in out["alerts"][0]["body"]
+
+
+# ---------------------------------------------------------------- idle windows
+
+def _flat_weights():
+    return panel.duty_weights({"cost": [1.0] * 24, "dow_cost": [[1.0] * 24 for _ in range(7)]})
+
+
+def test_an_unused_window_stays_at_zero_whatever_history_says():
+    """The Fable bug, 2026-09-23: 0% used a day into the week, and history from
+    weeks when Fable ran out projected it to land near 78%."""
+    prior = {"expected_end": 105.0, "days_observed": 16.0,
+             "last_rise": 100.0, "last_coverage": 1.0}
+    built = panel.build_window(_window(0.0, elapsed_frac=0.09), _flat_weights(), prior)
+    assert built["source"] == "idle"
+    assert built["headline"] == "landing near 0% at reset"
+    assert built["verdict"] == "not in use"
+    assert built["state"] == "ok"
+    assert built["over_cap"] is False
+    assert "burning" not in built["detail"]
+    assert "under pace" not in built["verdict"]
+
+
+def test_a_fresh_window_still_leans_on_history():
+    """The 09-16 fix must survive: minutes after a reset a zero is an early
+    start, not evidence, so history still carries the projection."""
+    prior = {"expected_end": 104.0, "days_observed": 9.0,
+             "last_rise": 85.0, "last_coverage": 1.0}
+    built = panel.build_window(_window(0.0, elapsed_frac=0.002), _flat_weights(), prior)
+    assert built["source"] == "history"
+    assert built["verdict"] != "not in use"
+
+
+def test_a_window_after_an_unused_week_opens_at_zero():
+    """Reset night: no working time has passed, but the whole last window went
+    unused, so the new one is not forecast to run out before anyone is awake."""
+    prior = {"expected_end": 72.0, "days_observed": 22.0,
+             "last_rise": 0.0, "last_coverage": 1.0}
+    built = panel.build_window(_window(0.0, elapsed_frac=0.001), _flat_weights(), prior)
+    assert built["source"] == "idle"
+    assert built["headline"] == "landing near 0% at reset"
+
+
+def test_a_barely_sampled_quiet_week_is_not_evidence():
+    prior = {"expected_end": 72.0, "days_observed": 22.0,
+             "last_rise": 0.0, "last_coverage": 0.1}
+    assert panel.idle_window(0.0, 0.0, prior) is False
+
+
+def test_any_use_ends_idle():
+    """Idle never hides consumption: once anything is spent, the blend is back."""
+    prior = {"expected_end": 105.0, "days_observed": 16.0,
+             "last_rise": 0.0, "last_coverage": 1.0}
+    assert panel.idle_window(1.0, 0.5, prior) is False
+    built = panel.build_window(_window(2.0, elapsed_frac=0.09), _flat_weights(), prior)
+    assert built["source"] != "idle"
+
+
+def test_no_history_is_not_idle():
+    assert panel.idle_window(0.0, 0.5, None) is False
+    assert panel.idle_window(0.0, 0.5, {"expected_end": None}) is False
