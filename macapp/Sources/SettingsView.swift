@@ -4,14 +4,31 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: UsageStore
     @ObservedObject private var notifier = Notifier.shared
+    @AppStorage(PillStyle.key) private var styleRaw = PillStyle.fallback.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
+
+    private var style: PillStyle { PillStyle(rawValue: styleRaw) ?? .fallback }
 
     var body: some View {
         Form {
             LabeledContent("Menu bar") { Text(store.barSpoken).foregroundStyle(.secondary) }
 
-            Text("Every weekly window is always shown, the model-scoped one first, so a nearly spent model cannot hide what is left for the others. The 5-hour window joins them only while it is amber or red. Each sits on its own green, amber or red background, so it reads the same over any wallpaper.")
+            Picker("Style", selection: $styleRaw) {
+                ForEach(PillStyle.allCases) { Text($0.title).tag($0.rawValue) }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    StylePreview(style: style, dark: false)
+                    StylePreview(style: style, dark: true)
+                }
+                Text(style.blurb)
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text("Every weekly window is always shown, the model-scoped one first, so a nearly spent model cannot hide what is left for the others. The 5-hour window joins them only while it is amber or red. The colour is the forecast, not a fixed threshold: green lands under 100% by reset, amber is close, red is on course to run out.")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -42,7 +59,7 @@ struct SettingsView: View {
             LabeledContent("Server") { Text(linkText).foregroundStyle(.secondary) }
         }
         .formStyle(.grouped)
-        .frame(width: 380)
+        .frame(width: 400)
         .padding(.vertical, 8)
     }
 
@@ -64,5 +81,33 @@ struct SettingsView: View {
             loginError = error.localizedDescription
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }
+    }
+}
+
+/// A style drawn on a light or dark strip, with one window in each colour, so
+/// every state can be judged before choosing.
+private struct StylePreview: View {
+    let style: PillStyle
+    let dark: Bool
+
+    private static let sample: [UsageWindow] = [
+        sampleWindow("weekly_scoped", "Fable", 94, "alert"),
+        sampleWindow("weekly_all", "All models", 71, "watch"),
+        sampleWindow("session", "5-hour", 22, "ok"),
+    ]
+
+    var body: some View {
+        Image(nsImage: BarLabel.image(Self.sample, style: style, dark: dark))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 5)
+                .fill(dark ? Color(white: 0.16) : Color(white: 0.93)))
+    }
+
+    private static func sampleWindow(_ key: String, _ label: String, _ pct: Double, _ state: String) -> UsageWindow {
+        let j = """
+        {"key":"\(key)","label":"\(label)","used_pct":\(pct),"headline":"","verdict":"","tone":"",
+         "state":"\(state)","kicker":"","detail":"","basis":"","resets_at":null,"over_cap":false,"resets_in":null}
+        """
+        return try! JSONDecoder().decode(UsageWindow.self, from: Data(j.utf8))
     }
 }
