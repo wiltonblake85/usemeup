@@ -212,10 +212,15 @@ enum BarLabel {
     /// `dark` is the menu bar's appearance. The caller passes it rather than
     /// this reading it at draw time, because SwiftUI may rasterise the image
     /// once, under an appearance that is not the menu bar's.
-    static func image(_ windows: [UsageWindow], style: PillStyle = .fallback, dark: Bool) -> NSImage {
+    static func image(_ windows: [UsageWindow], style: PillStyle = .fallback, dark: Bool,
+                      allClear: Bool = false) -> NSImage {
         guard !windows.isEmpty else {
-            // No reading yet. A template image, so the bar colours it itself.
-            let dash = str("--", font, .black)
+            // "--" is no reading yet. A check is readings in hand with nothing
+            // set to show right now (every window left on is "only when amber
+            // or red", and all are green). Either way the item stays in the
+            // bar so the panel can still be opened. A template image, so the
+            // bar colours it itself.
+            let dash = str(allClear ? "✓" : "--", font, .black)
             let size = dash.size()
             let img = NSImage(size: NSSize(width: ceil(size.width), height: height), flipped: false) { r in
                 dash.draw(at: NSPoint(x: 0, y: (r.height - size.height) / 2)); return true

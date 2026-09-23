@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var store: UsageStore
     @ObservedObject private var notifier = Notifier.shared
+    @ObservedObject private var prefs = WindowPrefs.shared
     @AppStorage(PillStyle.key) private var styleRaw = PillStyle.fallback.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
@@ -28,7 +29,26 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("Every weekly window is always shown, the model-scoped one first, so a nearly spent model cannot hide what is left for the others. The 5-hour window joins them only while it is amber or red. The colour is the forecast, not a fixed threshold: green lands under 100% by reset, amber is close, red is on course to run out.")
+            Text("The colour is the forecast, not a fixed threshold: green lands under 100% by reset, amber is close, red is on course to run out.")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider().padding(.vertical, 4)
+
+            // One row per window the server reports, including ones turned
+            // off, so anything turned off can be turned back on.
+            if settingsWindows.isEmpty {
+                LabeledContent("Windows") {
+                    Text("appear after the first reading").foregroundStyle(.secondary)
+                }
+            } else {
+                ForEach(settingsWindows) { w in
+                    Picker(w.label, selection: prefs.binding(w.key)) {
+                        ForEach(WindowShow.allCases) { Text($0.title).tag($0) }
+                    }
+                }
+            }
+            Text("Off hides a window from the menu bar and its drop-down, and stops its notifications. It is still measured, so turning it back on shows current figures at once.")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -61,6 +81,12 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 400)
         .padding(.vertical, 8)
+    }
+
+    /// Same order as the panel: weekly windows first, the 5-hour window last.
+    private var settingsWindows: [UsageWindow] {
+        let rank = ["weekly_all": 0, "weekly_scoped": 1, "session": 2]
+        return store.allWindows.sorted { (rank[$0.key] ?? 9) < (rank[$1.key] ?? 9) }
     }
 
     private var linkText: String {

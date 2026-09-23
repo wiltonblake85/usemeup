@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PanelView: View {
     @EnvironmentObject var store: UsageStore
+    @ObservedObject private var prefs = WindowPrefs.shared
     @Environment(\.openSettings) private var openSettings
     @State private var tick = Date()
 
@@ -19,6 +20,8 @@ struct PanelView: View {
 
             if case .failed(let why) = store.link {
                 problem(why)
+            } else if ordered.isEmpty && !store.allWindows.isEmpty {
+                problem("Every window is turned off. Choose which to show in Settings.")
             } else if ordered.isEmpty {
                 problem(store.fetchError ?? "Waiting for the first reading…")
             } else {

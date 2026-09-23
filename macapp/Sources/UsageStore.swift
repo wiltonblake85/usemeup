@@ -33,10 +33,19 @@ final class UsageStore: ObservableObject {
 
     // ---------------------------------------------------------------- windows
 
-    var windows: [UsageWindow] { payload?.windows ?? [] }
+    /// Every window the server reports, including ones turned off. Settings
+    /// lists these so a window can be turned back on.
+    var allWindows: [UsageWindow] { payload?.windows ?? [] }
 
-    /// The worst window as the SERVER ranked it. Falling back to a local max
-    /// only when `worst` is missing keeps one ranking rule in one place.
+    /// The windows the user has not turned off. Everything the app shows or
+    /// says reads from this, never from `allWindows`.
+    var windows: [UsageWindow] {
+        allWindows.filter { WindowPrefs.shared.mode($0.key) != .off }
+    }
+
+    /// The worst window as the SERVER ranked it, unless the user turned that
+    /// one off. Falling back to a local max only then keeps one ranking rule
+    /// in one place.
     var worst: UsageWindow? {
         if let k = payload?.worst, let w = windows.first(where: { $0.key == k }) { return w }
         return windows.max { $0.severity < $1.severity }
@@ -44,30 +53,35 @@ final class UsageStore: ObservableObject {
 
     /// What the menu bar shows, left to right.
     ///
-    /// Every weekly window is always there, model-scoped ones first. An earlier
-    /// build let the single worst window take the bar over, which hid exactly
-    /// the wrong thing: once a scoped window is nearly spent you stop using
-    /// that model, the question is closed, and the all-models figure is the
-    /// one you now need. It must not be displaced by a window you have already
-    /// acted on.
+    /// Each window's place is the user's choice in Settings (WindowPrefs):
+    /// always, only while amber or red, or off. Out of the box that is every
+    /// weekly window always and the 5-hour window only when it is in trouble.
     ///
-    /// The 5-hour window (and anything else) joins only while it is amber or
-    /// red. It is noise on a normal day, but when it hits the wall it blocks
-    /// every model at once.
+    /// Nothing takes the bar over. An earlier build let the single worst window
+    /// do that, which hid exactly the wrong thing: once a scoped window is
+    /// nearly spent you stop using that model, the question is closed, and the
+    /// all-models figure is the one you now need.
     var barSegments: [UsageWindow] {
         let rank: (UsageWindow) -> Int = { w in
             if w.key.hasPrefix("weekly_scoped") { return 0 }
             if w.key == "weekly_all" { return 1 }
             return 2
         }
+        let prefs = WindowPrefs.shared
         return windows
-            .filter { $0.alwaysInBar || $0.severity > .calm }
+            .filter { prefs.mode($0.key) == .always || $0.severity > .calm }
             .sorted { rank($0) < rank($1) }
     }
 
+    /// Readings exist but nothing is set to show right now: every window left
+    /// on is "only when amber or red" and all of them are green. The bar then
+    /// shows a check rather than the "--" that means no reading at all.
+    var barAllClear: Bool { barSegments.isEmpty && !allWindows.isEmpty }
+
     /// The same thing in words, for VoiceOver and the tooltip.
     var barSpoken: String {
-        barSegments.isEmpty ? "No reading yet"
+        if barAllClear { return "Nothing needs attention" }
+        return barSegments.isEmpty ? "No reading yet"
             : barSegments.map { "\($0.label) \($0.barValue)" }
                 .joined(separator: ", ")
     }
@@ -146,7 +160,12 @@ final class UsageStore: ObservableObject {
             lastFetch = Date()
             fetchError = decoded.ok ? nil : (decoded.error ?? "the server has no rate-limit data")
             if case .failed = link { link = .attached }
-            await Notifier.shared.deliver(decoded.alerts ?? [])
+            // A window turned off raises nothing. Filtered here, not on the
+            // server, because the choice lives in this app's settings.
+            let prefs = WindowPrefs.shared
+            await Notifier.shared.deliver((decoded.alerts ?? []).filter {
+                prefs.mode(WindowPrefs.key(ofAlert: $0.id)) != .off
+            })
         } catch {
             fetchError = error.localizedDescription
         }

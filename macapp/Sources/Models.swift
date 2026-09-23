@@ -70,9 +70,7 @@ struct UsageWindow: Codable, Identifiable {
     /// so in a word, because "100%" reads as a number that might still move.
     var barValue: String { usedPct >= 100 ? "spent" : shortPct }
 
-    /// The weekly windows are the ones a week is planned around, so they are
-    /// always in the bar. Everything else earns its place by being in trouble.
-    var alwaysInBar: Bool { key == "weekly_all" || key.hasPrefix("weekly_scoped") }
+    // Which windows sit in the bar is the user's choice now; see WindowPrefs.
 
     enum CodingKeys: String, CodingKey {
         case key, label, headline, advice, verdict, tone, state, kicker, detail, basis
