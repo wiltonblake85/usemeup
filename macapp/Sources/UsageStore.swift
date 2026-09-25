@@ -4,9 +4,31 @@ import SwiftUI
 /// rather than showing a blank meter and letting you guess.
 enum ServerLink: Equatable {
     case starting
+    case waitingForAgent   // the usemeup LaunchAgent is installed; giving it time to claim the port
     case attached          // a usemeup server was already listening; we joined it
     case spawned           // we started the bundled one ourselves
     case failed(String)
+}
+
+/// What `/api/ping` says about the server on the port.
+struct ServerInfo: Codable, Equatable {
+    let app: String
+    let version: String?
+    let pid: Int?
+    let source: String?
+    let autoRefresh: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case app, version, pid, source
+        case autoRefresh = "auto_refresh"
+    }
+}
+
+/// Who answers on the port.
+private enum Occupant {
+    case usemeup(ServerInfo?)   // nil info: a server older than /api/ping
+    case foreign                // something answered, and it is not usemeup
+    case nobody
 }
 
 @MainActor
@@ -24,6 +46,17 @@ final class UsageStore: ObservableObject {
 
     private var timer: Timer?
     private var server: Process?
+    /// One bring-up at a time: the timer, a failed refresh and a settings
+    /// change can all ask for one.
+    private var bringingUp = false
+    /// The server on the port, as it described itself. Settings shows it.
+    @Published private(set) var serverInfo: ServerInfo?
+
+    /// The `usemeup agent install` LaunchAgent. When it exists it owns the
+    /// port, and this app waits for it rather than racing it at login.
+    static let agentPlist: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/LaunchAgents/com.wiltonblake.usemeup.plist")
+
     private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 8
@@ -93,6 +126,8 @@ final class UsageStore: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
+        // Nothing here needs the minute on the dot; let the system batch wakeups.
+        timer?.tolerance = 10
     }
 
     func stop() {
@@ -106,9 +141,53 @@ final class UsageStore: ObservableObject {
 
     // ---------------------------------------------------------------- server
 
+    /// Find or start a server, in this order:
+    ///
+    /// 1. A usemeup server already answers: join it.
+    /// 2. Something else holds the port: say so and stop. Starting ours would
+    ///    only have it wait in standby behind a program that is not ours.
+    /// 3. The usemeup LaunchAgent is installed: wait for it. Both start at
+    ///    login, and before 2026-09-25 this app won that race, spawned its
+    ///    bundled copy, and left the agent failing to bind and restarting
+    ///    every ten seconds, 3,737 times in 14.5 hours.
+    /// 4. Otherwise, or if the agent never answers: start the bundled server
+    ///    with the settings chosen in this app.
     private func bringUpServer() async {
-        if await probe() { link = .attached; await refresh(); return }
+        guard !bringingUp else { return }
+        bringingUp = true
+        defer { bringingUp = false }
 
+        switch await occupant() {
+        case .usemeup(let info):
+            serverInfo = info
+            link = .attached
+            await refresh()
+            return
+        case .foreign:
+            link = .failed("Port \(Self.port) is in use by another program, so UseMeUp cannot run its server there. Quit that program and UseMeUp will pick up on its next check.")
+            return
+        case .nobody:
+            break
+        }
+
+        if FileManager.default.fileExists(atPath: Self.agentPlist.path) {
+            link = .waitingForAgent
+            let deadline = Date().addingTimeInterval(90)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if case .usemeup(let info) = await occupant() {
+                    serverInfo = info
+                    link = .attached
+                    await refresh()
+                    return
+                }
+            }
+            NSLog("UseMeUp: the usemeup LaunchAgent is installed but nothing answered on %d in 90 s; starting the bundled server", Self.port)
+        }
+        await spawn()
+    }
+
+    private func spawn() async {
         guard let exe = bundledServer() else {
             link = .failed("No server is running on port \(Self.port), and this build has no bundled server in Contents/Resources/server.")
             return
@@ -116,6 +195,8 @@ final class UsageStore: ObservableObject {
         let p = Process()
         p.executableURL = exe
         p.arguments = ["serve", "--no-open"]
+        // Explicit, not inherited: see ServerSettings.
+        p.environment = ServerSettings.shared.environment()
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch {
@@ -124,15 +205,35 @@ final class UsageStore: ObservableObject {
         }
         server = p
 
-        // First run indexes every transcript on disk, which is thousands of
-        // files, so this waits minutes rather than seconds before giving up.
+        // The server claims the port and answers /api/ping at once, then
+        // scans. A first run indexes every transcript on disk, which is
+        // thousands of files, so data can take minutes; the port cannot.
         let deadline = Date().addingTimeInterval(180)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            if await probe() { link = .spawned; await refresh(); return }
+            if case .usemeup(let info) = await occupant() {
+                serverInfo = info
+                link = .spawned
+                await refresh()
+                return
+            }
             if !p.isRunning { break }
         }
         link = .failed("The bundled server started but never answered on port \(Self.port).")
+    }
+
+    /// Restart a server this app started, so a changed setting takes effect.
+    /// A server the app joined keeps its own settings and is left alone.
+    func applyServerSettings() async {
+        guard link == .spawned, let p = server else { return }
+        p.terminate()
+        let deadline = Date().addingTimeInterval(10)
+        while p.isRunning && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        server = nil
+        link = .starting
+        await bringUpServer()
     }
 
     private func bundledServer() -> URL? {
@@ -141,12 +242,24 @@ final class UsageStore: ObservableObject {
         return FileManager.default.isExecutableFile(atPath: exe.path) ? exe : nil
     }
 
-    private func probe() async -> Bool {
-        guard let url = URL(string: "\(Self.base)/api/menubar") else { return false }
+    /// Who answers on the port. `/api/ping` costs the server nothing; a server
+    /// older than it gets one more question on /api/menubar before being
+    /// called foreign.
+    private func occupant() async -> Occupant {
+        guard let ping = URL(string: "\(Self.base)/api/ping"),
+              let menubar = URL(string: "\(Self.base)/api/menubar") else { return .nobody }
         do {
-            let (_, r) = try await session.data(from: url)
-            return (r as? HTTPURLResponse)?.statusCode == 200
-        } catch { return false }
+            let (data, r) = try await session.data(from: ping)
+            let code = (r as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200, let info = try? JSONDecoder().decode(ServerInfo.self, from: data),
+               info.app == "usemeup" {
+                return .usemeup(info)
+            }
+            let (_, r2) = try await session.data(from: menubar)
+            return (r2 as? HTTPURLResponse)?.statusCode == 200 ? .usemeup(nil) : .foreign
+        } catch {
+            return .nobody
+        }
     }
 
     // ---------------------------------------------------------------- polling
@@ -168,6 +281,15 @@ final class UsageStore: ObservableObject {
             })
         } catch {
             fetchError = error.localizedDescription
+            // The server went away: ours crashed, or the one we joined was
+            // stopped. Find or start one again rather than polling a dead port
+            // forever. A LaunchAgent restarts on its own; this waits for it.
+            let ours = server.map { !$0.isRunning } ?? false
+            let failed: Bool = { if case .failed = link { return true } else { return false } }()
+            if ours || link == .attached || failed {
+                if ours { server = nil }
+                Task { await bringUpServer() }
+            }
         }
     }
 

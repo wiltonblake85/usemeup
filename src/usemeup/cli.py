@@ -35,26 +35,9 @@ def cmd_serve(args):
         config.DEMO = True
     from . import server
     server.PORT = config.PORT
-    print("scanning transcripts…", flush=True)
-    info = server._maybe_ingest(force=True)
-    if info and "error" not in info:
-        print("  %s calls indexed (%s files read, %s unchanged, %ss)" % (
-            format(info["total_calls"], ","), format(info["files_scanned"], ","),
-            format(info["files_unchanged"], ","), info["seconds"]), flush=True)
-    else:
-        print("  ingest problem: %s" % (info or {}).get("error"), flush=True)
-    print(config.banner(), flush=True)
-    server.start_sampler()
-    if not args.no_open:
-        import threading
-        import webbrowser
-        threading.Timer(1.0, lambda: webbrowser.open(
-            "http://127.0.0.1:%d/" % config.PORT)).start()
-    try:
-        server.Server(("127.0.0.1", config.PORT), server.Handler).serve_forever()
-    except KeyboardInterrupt:
-        print("\nstopped.")
-    return 0
+    # One startup path for the CLI, the LaunchAgent and the bundled server:
+    # claim the port, and only then scan and sample. See server.run.
+    return server.run(config.PORT, open_browser=not args.no_open)
 
 
 def cmd_verify(args):

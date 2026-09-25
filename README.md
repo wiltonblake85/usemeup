@@ -206,8 +206,17 @@ countdown per window as the page.
 ```
 
 The build bundles the Python server with PyInstaller, so the app runs on a Mac
-with no Python setup. If a UseMeUp server is already listening on port 8787 the
-app joins it; otherwise it starts its bundled one and stops it again on quit.
+with no Python setup. At launch the app asks port 8787 who is there
+(`/api/ping`). A UseMeUp server: it joins it. Some other program: it says so
+rather than fight for the port. Nobody, but `usemeup agent install` has set up
+the LaunchAgent: it waits up to 90 seconds for that agent, which starts at the
+same login. Otherwise it starts its bundled server, and stops it again on quit.
+If the server it was reading goes away, it goes through the same steps again.
+
+Which source the bundled server reads, and whether it may renew an expired
+sign-in, are chosen in the app's Settings and passed to the server explicitly.
+They apply only to a server the app starts; a server it joined keeps its own
+settings, and Settings says which are in force.
 Building needs the Xcode command line tools and a Homebrew `python3.12`.
 
 `build.sh` signs ad-hoc, which is enough on the Mac that built it. `release.sh`
@@ -351,6 +360,13 @@ window open. It runs from the same Python and the same install you ran the
 command from, so a source checkout has to stay where it is. Logs go to
 `~/.usemeup/agent.log`. `usemeup agent status` shows whether it is loaded and
 listening, and `usemeup agent uninstall` removes it.
+
+Any UseMeUp server claims the port before it does anything else. If the port is
+taken it waits in standby, trying again every 30 seconds, and scans and samples
+nothing until the port is its own. So the agent and the menu bar app's bundled
+server can never both be running the sampler, and the agent never exits just to
+be restarted: when the other server stops, the agent takes over within 30
+seconds. `usemeup agent status` says which process is serving.
 
 ### Auto-refresh spends your tokens, so it is off unless you ask
 

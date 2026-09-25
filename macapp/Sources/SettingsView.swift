@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var store: UsageStore
     @ObservedObject private var notifier = Notifier.shared
     @ObservedObject private var prefs = WindowPrefs.shared
+    @ObservedObject private var serverSettings = ServerSettings.shared
     @AppStorage(PillStyle.key) private var styleRaw = PillStyle.fallback.rawValue
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
@@ -77,6 +78,22 @@ struct SettingsView: View {
             Divider().padding(.vertical, 4)
 
             LabeledContent("Server") { Text(linkText).foregroundStyle(.secondary) }
+
+            Picker("Rate limits from", selection: $serverSettings.source) {
+                ForEach(RateSource.allCases) { Text($0.title).tag($0) }
+            }
+            .disabled(store.link == .attached)
+            .onChange(of: serverSettings.source) { _, _ in
+                Task { await store.applyServerSettings() }
+            }
+            Toggle("Renew an expired sign-in by running claude -p ok", isOn: $serverSettings.autoRefresh)
+                .disabled(store.link == .attached || serverSettings.source == .statusline)
+                .onChange(of: serverSettings.autoRefresh) { _, _ in
+                    Task { await store.applyServerSettings() }
+                }
+            Text(serverNote)
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .formStyle(.grouped)
         .frame(width: 400)
@@ -89,13 +106,30 @@ struct SettingsView: View {
         return store.allWindows.sorted { (rank[$0.key] ?? 9) < (rank[$1.key] ?? 9) }
     }
 
+    private var pidText: String {
+        store.serverInfo?.pid.map { " (pid \($0))" } ?? ""
+    }
+
     private var linkText: String {
         switch store.link {
-        case .starting:       return "starting…"
-        case .attached:       return "joined the one already running on 8787"
-        case .spawned:        return "started by this app on 8787"
-        case .failed(let w):  return w
+        case .starting:        return "starting…"
+        case .waitingForAgent: return "waiting for the usemeup LaunchAgent to start"
+        case .attached:        return "joined the one already running on 8787" + pidText
+        case .spawned:         return "started by this app on 8787" + pidText
+        case .failed(let w):   return w
         }
+    }
+
+    /// When the app joined a server it did not start, the pickers above are
+    /// greyed out, and this says which settings are actually in force.
+    private var serverNote: String {
+        guard store.link == .attached else { return serverSettings.source.blurb }
+        guard let info = store.serverInfo, let raw = info.source else {
+            return "UseMeUp joined a server that was already running, so that server's own settings apply. These choices take effect when UseMeUp starts its own server."
+        }
+        let name = RateSource(rawValue: raw)?.title.lowercased() ?? raw
+        let renew = (info.autoRefresh ?? false) ? ", renewing an expired sign-in" : ""
+        return "UseMeUp joined a server that was already running, so its own settings apply: \(name)\(renew). These choices take effect when UseMeUp starts its own server."
     }
 
     private func setLogin(_ want: Bool) {

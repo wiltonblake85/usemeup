@@ -11,6 +11,20 @@ Binds 127.0.0.1, so nothing outside this machine can reach it.
   GET /api/panel    the two weekly burn-up charts, pace already applied
   GET /api/ingest   force a re-scan of the transcript folders
   GET /api/export   everything as one JSON download
+  GET /api/ping     who is serving: {"app": "usemeup", pid, source, auto_refresh}.
+                    Touches no cache, so a client can ask "is this port ours?"
+                    without paying for a rebuild.
+
+Starting up claims the port FIRST and only then scans transcripts and starts
+the sampler. If the port is taken the process waits in standby, retrying the
+bind every BIND_RETRY seconds, and does nothing else. This matters because two
+things can start a server at login: the LaunchAgent (KeepAlive) and the menu bar
+app, which spawns its bundled copy when nothing answers. The old order (scan,
+start the sampler, then bind) meant a process that was going to lose the port
+did the expensive work first and then died, and launchd restarted it every ten
+seconds. On 2026-09-25 that loop had run 3,737 times in 14.5 hours at roughly
+half a CPU core. Waiting instead of exiting also means the LaunchAgent takes
+over within BIND_RETRY seconds of the other server going away.
 
 It also keeps ~/.usemeup/status.json current (see status.py) for readers that
 would rather open a file than call this server.
@@ -23,6 +37,7 @@ The same tick re-scans the transcript folders (unchanged files are skipped, so
 it costs almost nothing), so the index is current the moment the page opens
 rather than however old the last page load was.
 """
+import errno
 import http.server
 import json
 import os
@@ -30,6 +45,7 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -66,6 +82,10 @@ def _maybe_ingest(force=False):
     if not force and time.time() - _last_ingest[0] < TTL_INGEST:
         return _cache["ingest"]
     with _lock:
+        # Someone else may have finished a scan while this caller waited for
+        # the lock (the startup scan, most often); one scan per TTL is enough.
+        if not force and time.time() - _last_ingest[0] < TTL_INGEST:
+            return _cache["ingest"]
         try:
             _cache["ingest"] = store.ingest()
             if (_cache["ingest"] or {}).get("new_calls"):
@@ -232,6 +252,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         try:
+            if path == "/api/ping":
+                return self._send(200, json.dumps(ping()), "application/json")
             if path in ("/", "/index.html"):
                 with open(os.path.join(HERE, "index.html"), "rb") as f:
                     return self._send(200, f.read(), "text/html; charset=utf-8")
@@ -278,7 +300,77 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-if __name__ == "__main__":
+def ping():
+    """Who this server is. Cheap on purpose: no cache, no disk, no network."""
+    from . import __version__
+    return {"app": config.APP, "version": __version__, "pid": os.getpid(),
+            "source": config.SOURCE, "auto_refresh": config.AUTO_REFRESH}
+
+
+# How often a server in standby tries the port again. A bind attempt costs
+# nothing, so this sets how quickly the LaunchAgent takes over, not the load.
+BIND_RETRY = 30
+
+
+def occupant(port, timeout=1.0):
+    """A short description of whatever holds 127.0.0.1:port.
+
+    Asks /api/ping. Another UseMeUp answers with its pid; anything else (a
+    Wrangler dev server on 8787, a server too old to have /api/ping) is
+    "another program". Only used for the standby log line.
+    """
+    # No proxy: a system or env proxy must never be asked about our own loopback.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open("http://127.0.0.1:%d/api/ping" % port, timeout=timeout) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        if isinstance(d, dict) and d.get("app") == config.APP:
+            return "another UseMeUp server (pid %s)" % d.get("pid")
+    except Exception:
+        pass
+    return "another program"
+
+
+def bind(port, retry_every=None, log=None, stop=None):
+    """Claim 127.0.0.1:port, waiting for it if it is taken. Returns the Server.
+
+    Waits rather than exits, so a LaunchAgent with KeepAlive never loops. Logs
+    once when it starts waiting and again only if the occupant changes, so a
+    long standby is one line in the log, not thousands. `stop` is an optional
+    threading.Event that ends the wait (returns None); tests use it.
+    """
+    retry_every = BIND_RETRY if retry_every is None else retry_every
+    log = log or (lambda m: print(m, flush=True))
+    said = None
+    while True:
+        try:
+            return Server(("127.0.0.1", port), Handler)
+        except OSError as e:
+            if e.errno != errno.EADDRINUSE:
+                raise
+        who = occupant(port)
+        if who != said:
+            log("port %d is held by %s; standing by, trying again every %ss. "
+                "Nothing is scanned or sampled until this process has the port."
+                % (port, who, retry_every))
+            said = who
+        if stop is not None:
+            if stop.wait(retry_every):
+                return None
+        else:
+            time.sleep(retry_every)
+
+
+def run(port=None, open_browser=True):
+    """Claim the port, then scan, then sample, then serve. See the module doc."""
+    port = port or PORT
+    httpd = bind(port)
+    print("port %d is ours (pid %d)." % (port, os.getpid()), flush=True)
+    # Serve from this moment, so /api/ping answers during a long first scan and
+    # the menu bar app can tell "ours, still scanning" from "nobody here". Data
+    # requests made meanwhile wait on the scan's lock rather than failing.
+    web = threading.Thread(target=httpd.serve_forever, name="usemeup-http", daemon=True)
+    web.start()
     print("scanning transcripts…", flush=True)
     info = _maybe_ingest(force=True)
     if info and "error" not in info:
@@ -287,11 +379,20 @@ if __name__ == "__main__":
             format(info["files_unchanged"], ","), info["seconds"]), flush=True)
     else:
         print("  ingest problem: %s" % (info or {}).get("error"), flush=True)
-
     print(config.banner(), flush=True)
     start_sampler()
-    threading.Timer(1.0, lambda: webbrowser.open("http://127.0.0.1:%d/" % PORT)).start()
+    if open_browser:
+        threading.Timer(1.0, lambda: webbrowser.open("http://127.0.0.1:%d/" % port)).start()
     try:
-        Server(("127.0.0.1", PORT), Handler).serve_forever()
+        while web.is_alive():
+            web.join(1.0)          # a timed join, so ctrl-c still lands here
     except KeyboardInterrupt:
         print("\nstopped.")
+        httpd.shutdown()
+    finally:
+        httpd.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run(PORT, open_browser=True))

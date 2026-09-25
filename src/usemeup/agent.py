@@ -85,7 +85,10 @@ def build_plist(auto_refresh=True, port=None):
         "ProgramArguments": [sys.executable, "-m", "usemeup.cli", "serve", "--no-open"],
         "EnvironmentVariables": env,
         "RunAtLoad": True,
-        "KeepAlive": True,               # restart on exit, whatever the reason
+        # Restart on exit, whatever the reason. Safe since 2026-09-25: a server
+        # that finds the port taken waits in standby (server.bind) instead of
+        # exiting, so this can no longer turn into a restart loop.
+        "KeepAlive": True,
         "ThrottleInterval": 10,          # but not in a tight loop
         "ProcessType": "Background",
         "StandardOutPath": LOG,
@@ -167,6 +170,13 @@ def status():
     print("loaded  : %s%s" % ("yes" if loaded else "no",
                                (", state %s, pid %s" % (state, pid)) if loaded else ""))
     print("serving : %s on 127.0.0.1:%d" % ("yes" if _listening(port) else "NO", port))
+    if _listening(port):
+        from . import server
+        who = server.occupant(port)
+        if pid and ("(pid %s)" % pid) in who:
+            print("by      : this agent (pid %s)" % pid)
+        else:
+            print("by      : %s; this agent is on standby and takes over when it stops" % who)
     print("python  : %s%s" % (exe, "" if os.path.exists(exe) else "  (MISSING)"))
     src = env.get("PYTHONPATH")
     if src:
