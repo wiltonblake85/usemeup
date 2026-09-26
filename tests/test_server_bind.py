@@ -173,6 +173,9 @@ class Ping(unittest.TestCase):
             self.assertIn(d["source"], config.SOURCES)
             self.assertIsInstance(d["pid"], int)
             self.assertIsInstance(d["auto_refresh"], bool)
+            # The page hash an open tab compares to notice an upgrade.
+            self.assertEqual(d["page"], server.PAGE_HASH)
+            self.assertTrue(d["page"])
         finally:
             httpd.shutdown()
             httpd.server_close()

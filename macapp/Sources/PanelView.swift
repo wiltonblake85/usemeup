@@ -26,7 +26,7 @@ struct PanelView: View {
             } else if ordered.isEmpty && !store.allWindows.isEmpty {
                 problem("Every window is turned off. Choose which to show in Settings.")
             } else if ordered.isEmpty {
-                problem(store.fetchError ?? "Waiting for the first reading…")
+                problem(firstRunHint(store.fetchError) ?? "Waiting for the first reading…")
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(ordered.enumerated()), id: \.element.id) { i, w in
@@ -56,6 +56,16 @@ struct PanelView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    /// A fresh download reads the Claude Code status line, which stays empty
+    /// until the status line is set up and one message is sent in Claude Code.
+    /// Someone who never uses Claude Code in a terminal would wait forever, so
+    /// when this app started the server, point at the other way in too.
+    private func firstRunHint(_ error: String?) -> String? {
+        guard let e = error else { return nil }
+        guard e.hasPrefix("No status line reading"), store.link == .spawned else { return e }
+        return e + "\n\nOr open Settings and set Rate limits from to Usage endpoint. It asks Anthropic directly with the sign-in Claude Code saved in your Keychain, so it sees usage from Cowork and claude.ai too. If you rarely open Claude Code, also turn on the renew option under it."
     }
 
     private func problem(_ text: String) -> some View {

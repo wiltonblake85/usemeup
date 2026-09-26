@@ -924,7 +924,19 @@ function wireTips(sel) {
 
 
 // ---------- boot ----------
+// A tab left open across an upgrade would keep running this old code. The
+// server reports a hash of the page it serves; when that changes, reload.
+let PAGE_SEEN = null;
+async function pageChanged() {
+  try {
+    const p = await (await fetch("/api/ping")).json();
+    if (PAGE_SEEN === null) { PAGE_SEEN = p.page || ""; return false; }
+    return !!p.page && p.page !== PAGE_SEEN;
+  } catch (e) { return false; }
+}
+
 async function load() {
+  if (await pageChanged()) { location.reload(); return; }
   // The work-day pace model takes its weekday shape from the transcript index
   // (dutyWeights). /api/rhythm is exactly that and nothing more; /api/usage
   // was 134 KB of aggregates this page no longer draws.

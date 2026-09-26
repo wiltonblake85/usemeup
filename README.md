@@ -38,6 +38,23 @@ runs all of them. `PYTHONPATH=src python3 -m unittest discover tests` needs
 nothing installed but skips `test_panel.py` and `test_history.py`, which are
 written as plain functions.
 
+## The Mac app
+
+If you'd rather not touch Python, download `UseMeUp-0.1.0.dmg` from [Releases](https://github.com/wiltonblake85/usemeup/releases), open it and drag UseMeUp to Applications. It's signed with a Developer ID and notarized, so it opens without a Gatekeeper warning. Apple silicon only, macOS 14 or later.
+
+The app starts its own copy of the server, so there's nothing else to run. Before it can show a number it needs a source for the readings, and there are two.
+
+**The Claude Code status line** is the default. Add this to `~/.claude/settings.json` and send one message in Claude Code:
+
+```json
+{ "statusLine": { "type": "command",
+  "command": "/Applications/UseMeUp.app/Contents/Resources/server/usemeup-server statusline" } }
+```
+
+After that, every Claude Code turn refreshes the reading. No credential and no network call, but it only moves when you use Claude Code in a terminal.
+
+**The usage endpoint** is the other. In the app's Settings, set Rate limits from to Usage endpoint. It asks Anthropic directly, using the sign-in Claude Code keeps in your Keychain, so it sees what Cowork and claude.ai spend as it happens, and it's the only source with the per-model weekly window. macOS asks whether UseMeUp may read that Keychain item; allow it. If you rarely open Claude Code, also turn on the renew option under it, because that sign-in expires after 8 to 12 hours and only a Claude Code call renews it.
+
 ## Why another usage meter
 
 There are plenty of menu bar meters for Claude limits. Most stop at a percentage

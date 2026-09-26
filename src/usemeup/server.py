@@ -34,11 +34,14 @@ While the server runs it also samples the rate-limit windows itself, once every
 SAMPLE_EVERY seconds, so the daily view is not blind whenever the page is closed.
 It goes through the same cache, TTL and 429 back-off as the page, so the total
 call rate to api.anthropic.com is unchanged: at most one probe per five minutes.
-The same tick re-scans the transcript folders (unchanged files are skipped, so
-it costs almost nothing), so the index is current the moment the page opens
-rather than however old the last page load was.
+The transcript folders are scanned only when something is about to be rebuilt
+from them: the working-day rhythm every 15 minutes, the full aggregates for
+/api/usage at most as often. A scan walks about 10,000 folders, so doing it on
+every tick or request, as earlier versions did, cost CPU for an index nobody
+read in between.
 """
 import errno
+import hashlib
 import http.server
 import json
 import os
@@ -66,7 +69,12 @@ _cache = {"usage": None, "usage_at": 0, "limits": None, "limits_at": 0, "ingest"
           "priors": None, "priors_at": 0}
 _lock = threading.Lock()
 
-TTL_USAGE, TTL_INGEST = 60, 120
+# /api/usage rebuilds every transcript aggregate (about 3.5 s of CPU on
+# 105,000 calls). Nothing in the app or the page reads it any more; it serves
+# /api/export and a page tab still running JavaScript from before 2026-09-25,
+# which polls it every minute. That tab cost a 3.6 s burst a minute on
+# 2026-09-26. A quarter hour is fresh enough for an export.
+TTL_USAGE, TTL_INGEST = 900, 120
 # The working-day rhythm is months of history; a quarter hour is plenty fresh.
 TTL_RHYTHM = 900
 # History moves over days. Rebuilding it reads the whole sample table.
@@ -91,8 +99,9 @@ def _maybe_ingest(force=False):
             return _cache["ingest"]
         try:
             _cache["ingest"] = store.ingest()
-            if (_cache["ingest"] or {}).get("new_calls"):
-                _cache["usage"] = None      # aggregates are stale; rebuild on next read
+            # New calls no longer throw the aggregates away at once: with a
+            # Claude session running, that meant a full rebuild every two
+            # minutes for any client polling /api/usage. TTL_USAGE bounds it.
         except Exception as e:
             _cache["ingest"] = {"error": "%s: %s" % (type(e).__name__, e)}
         _last_ingest[0] = time.time()
@@ -135,9 +144,9 @@ _priors_lock = threading.Lock()
 
 def _usage():
     """Every transcript aggregate. Only /api/usage and /api/export need this."""
-    _maybe_ingest()
     with _usage_lock:
         if not _cache["usage"] or time.time() - _cache["usage_at"] > TTL_USAGE:
+            _maybe_ingest()        # only when rebuilding; see _rhythm
             d = parse_usage.build()
             d["ingest"] = _cache["ingest"]
             _cache["usage"], _cache["usage_at"] = d, time.time()
@@ -150,10 +159,16 @@ def _rhythm():
     panel.build, panel.menubar and status.build take a `usage` argument but
     only ever read usage["by_hour"]. Handing them this instead of _usage()
     keeps the every-minute menu bar poll from rebuilding every aggregate.
+
+    The transcript scan runs only when the rhythm is about to be rebuilt.
+    Until 2026-09-26 every call scanned first (at most every two minutes),
+    and nothing read the fresher index before the next rebuild: 10,000
+    folders stat'ed for nothing, 1 to 4 s of CPU each time, measured with
+    the per-request logging below.
     """
-    _maybe_ingest()
     with _rhythm_lock:
         if _cache.get("rhythm") is None or time.time() - _cache.get("rhythm_at", 0) > TTL_RHYTHM:
+            _maybe_ingest()
             try:
                 _cache["rhythm"] = {"by_hour": parse_usage.rhythm(), "demo": config.DEMO}
             except Exception as e:
@@ -262,26 +277,50 @@ def _write_status():
 
 
 def _sampler():
-    """Keep the sample history and the transcript index filling while the page is closed.
+    """Keep the rate-limit sample history filling while the page is closed.
 
     _limits() owns every rule about when a probe is allowed (cache TTL, error
     TTL, 429 back-off), so this loop just asks on a timer and lets it decide.
     Failures are already recorded in the cache; nothing to do here but wait.
-    _maybe_ingest() has its own TTL and skips unchanged files, so calling it
-    here keeps the index fresh at no real cost.
+    The transcript index is refreshed by whoever rebuilds from it (_rhythm,
+    _usage), not here.
     """
     _write_status()           # at start, so a reader is not blind for five minutes
     while True:
         time.sleep(SAMPLE_EVERY)
-        try:
-            _maybe_ingest()
-        except Exception:
-            pass
+        cpu0, t0 = time.thread_time(), time.time()
+        marks = []
+        # No transcript scan here any more: _rhythm and _usage scan when they
+        # rebuild, which is the only time a fresher index is read.
         try:
             _limits()
         except Exception:
             pass
+        marks.append(("limits", time.thread_time()))
         _write_status()
+        marks.append(("status", time.thread_time()))
+        _log_slow_tick(cpu0, t0, marks)
+
+
+SLOW_TICK_CPU = 1.0    # seconds of CPU; a normal tick is a small fraction of that
+
+
+def _log_slow_tick(cpu0, t0, marks):
+    """One log line when a sampler tick costs real CPU, naming where it went.
+
+    thread_time counts this thread only, so a request served meanwhile by
+    another thread is not charged to the tick. Quiet ticks log nothing, so a
+    healthy agent.log does not grow.
+    """
+    total = marks[-1][1] - cpu0
+    if total < SLOW_TICK_CPU:
+        return
+    parts, prev = [], cpu0
+    for name, at in marks:
+        parts.append("%s %.2fs" % (name, at - prev))
+        prev = at
+    print("%s slow sampler tick: %.2fs CPU over %.2fs wall (%s)" % (
+        time.strftime("%H:%M:%S"), total, time.time() - t0, ", ".join(parts)), flush=True)
 
 
 def start_sampler():
@@ -306,6 +345,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def do_GET(self):
+        cpu0, t0 = time.thread_time(), time.time()
+        try:
+            self._get()
+        finally:
+            cpu = time.thread_time() - cpu0
+            if cpu >= SLOW_TICK_CPU:
+                print("%s slow request %s: %.2fs CPU over %.2fs wall" % (
+                    time.strftime("%H:%M:%S"), self.path, cpu, time.time() - t0), flush=True)
+
+    def _get(self):
         path = self.path.split("?")[0]
         try:
             if path == "/api/ping":
@@ -362,11 +411,29 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+def _page_hash():
+    try:
+        with open(os.path.join(HERE, "index.html"), "rb") as f:
+            return hashlib.sha1(f.read()).hexdigest()[:12]
+    except OSError:
+        return None
+
+
+# Fixed at start: the page a server serves only changes when the server does.
+PAGE_HASH = _page_hash()
+
+
 def ping():
-    """Who this server is. Cheap on purpose: no cache, no disk, no network."""
+    """Who this server is. Cheap on purpose: no cache, no disk, no network.
+
+    `page` lets an open dashboard tab notice that the server now serves a
+    different page and reload itself, so a tab left open across an upgrade
+    stops running old code against new endpoints.
+    """
     from . import __version__
     return {"app": config.APP, "version": __version__, "pid": os.getpid(),
-            "source": config.SOURCE, "auto_refresh": config.AUTO_REFRESH}
+            "source": config.SOURCE, "auto_refresh": config.AUTO_REFRESH,
+            "page": PAGE_HASH}
 
 
 # How often a server in standby tries the port again. A bind attempt costs
