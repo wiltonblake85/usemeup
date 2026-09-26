@@ -267,7 +267,9 @@ final class UsageStore: ObservableObject {
     // ---------------------------------------------------------------- polling
 
     func refresh() async {
-        guard let url = URL(string: "\(Self.base)/api/menubar") else { return }
+        // With the chart series: the drop-down draws the burn-up charts, and
+        // about 15 KB a minute over loopback costs nothing worth saving.
+        guard let url = URL(string: "\(Self.base)/api/menubar?series=1") else { return }
         do {
             let (data, _) = try await session.data(from: url)
             let decoded = try JSONDecoder().decode(MenuBarPayload.self, from: data)
@@ -307,9 +309,5 @@ final class UsageStore: ObservableObject {
         guard let secs = w.resetsIn, let at = lastFetch else { return nil }
         let left = secs - Int(Date().timeIntervalSince(at))
         return left <= 0 ? "resetting now" : countdown(left)
-    }
-
-    func openDashboard() {
-        if let u = URL(string: "\(Self.base)/") { NSWorkspace.shared.open(u) }
     }
 }

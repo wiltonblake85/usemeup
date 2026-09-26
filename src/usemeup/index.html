@@ -839,9 +839,17 @@ function renderMeters(d) {
       <br><br>Percentages below are from that earlier check and are no longer live. Countdowns are current.</div>` : "";
 
   const W = widthOf("#meters");
+  // Windows turned off in the menu bar app (a retired model's, say) are not
+  // drawn here either. The server still measures them.
+  const hidden = new Set(d.hidden || []);
   // Longest window first. The weekly windows are the ones with consequences;
   // the 5-hour session window resets before you finish reading about it.
-  const ordered = d.windows.slice().sort((a, b) => (b.window_seconds || 0) - (a.window_seconds || 0));
+  const ordered = d.windows.filter(w => !hidden.has(w.key))
+    .sort((a, b) => (b.window_seconds || 0) - (a.window_seconds || 0));
+  if (!ordered.length) {
+    el.innerHTML = `<div class="note">Every window is turned off in the UseMeUp menu bar app's Settings.</div>`;
+    return;
+  }
   el.innerHTML = staleBanner + ordered.map(w => {
     const p = w.used_pct, st = sevOf(p);
     // Measured bars are capped at "serious" so they never match the overspend
@@ -892,11 +900,11 @@ function wireTips(sel) {
 
 // ---------- boot ----------
 async function load() {
-  // The transcript index is still fetched, for one reason: the work-day pace
-  // model takes its weekday shape from it (dutyWeights). Nothing else on this
-  // page is drawn from it.
+  // The work-day pace model takes its weekday shape from the transcript index
+  // (dutyWeights). /api/rhythm is exactly that and nothing more; /api/usage
+  // was 134 KB of aggregates this page no longer draws.
   try {
-    const u = await (await fetch("/api/usage")).json();
+    const u = await (await fetch("/api/rhythm")).json();
     STATE.usage = u;
     renderPaceCtl();
     $("#demo-banner").innerHTML = u.demo

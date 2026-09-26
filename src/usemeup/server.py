@@ -228,6 +228,25 @@ def _limits_unlocked():
 
 SAMPLE_EVERY = TTL_LIMITS    # one probe per cache lifetime; never more than the page alone
 
+WINDOWS_FILE = os.path.join(config.DB_DIR, "windows.json")
+
+
+def hidden_windows(path=None):
+    """Window keys the user turned off in the menu bar app.
+
+    The app publishes its per-window choice to ~/.usemeup/windows.json (see
+    WindowPrefs.swift); Transom already honours it, and the page now does too,
+    so a retired model's window (Fable, once Opus 5.5 replaced it) is gone
+    everywhere at once. Only "off" hides. No file, a bad file or a missing key
+    hides nothing: the server keeps measuring every window regardless.
+    """
+    try:
+        with open(path or WINDOWS_FILE) as f:
+            choices = (json.load(f) or {}).get("windows") or {}
+        return sorted(k for k, v in choices.items() if v == "off")
+    except Exception:
+        return []
+
 
 def _write_status():
     """Rewrite ~/.usemeup/status.json from the caches the page already uses.
@@ -299,7 +318,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if path == "/api/rhythm":
                 return self._send(200, json.dumps(_rhythm(), default=str), "application/json")
             if path == "/api/limits":
-                return self._send(200, json.dumps(_limits(), default=str), "application/json")
+                # A shallow copy: the hidden list is per request, never cached.
+                d = dict(_limits() or {})
+                d["hidden"] = hidden_windows()
+                return self._send(200, json.dumps(d, default=str), "application/json")
             if path == "/api/panel":
                 # Both halves come from the cache _limits() and _rhythm() already
                 # own, so a client polling this adds no api.anthropic.com traffic
@@ -311,9 +333,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # Same model as /api/panel, minus the plotted series. A menu
                 # bar polls on a timer forever, so it gets its own shape
                 # rather than pulling 9 KB of chart points every minute.
+                series = "series=1" in (self.path.split("?", 1) + [""])[1].split("&")
                 return self._send(200, json.dumps(
-                    panel.menubar(_rhythm(), _limits(), _priors()), default=str),
-                    "application/json")
+                    panel.menubar(_rhythm(), _limits(), _priors(), series=series),
+                    default=str), "application/json")
             if path == "/api/ingest":
                 _cache["usage"] = None
                 return self._send(200, json.dumps(_maybe_ingest(force=True)), "application/json")

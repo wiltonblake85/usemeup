@@ -234,6 +234,17 @@ def test_menubar_payload_carries_alerts():
     assert panel.menubar({}, {"ok": False})["alerts"] == []
 
 
+def test_menubar_series_only_on_request():
+    # The every-minute bar poll stays small; the drop-down asks for the charts.
+    limits = {"ok": True, "windows": [_window(60, 0.5, projected_end=120)]}
+    lean = panel.menubar({}, limits)["windows"][0]
+    full = panel.menubar({}, limits, series=True)["windows"][0]
+    for k in ("reference", "observed", "projection", "t0", "t1", "now", "y_max"):
+        assert k not in lean, k
+        assert k in full, k
+    assert len(full["observed"]) >= 2 and len(full["observed"][0]) == 2
+
+
 # ---------------------------------------------------------------- advice
 
 def test_green_windows_get_no_advice():

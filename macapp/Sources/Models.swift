@@ -36,6 +36,16 @@ struct UsageWindow: Codable, Identifiable {
     let overCap: Bool
     let resetsIn: Int?
 
+    // The burn-up chart, present when the app asks /api/menubar?series=1.
+    // Epoch seconds; each point is [t, percent].
+    let t0: Double?
+    let t1: Double?
+    let now: Double?
+    let yMax: Double?
+    let reference: [[Double]]?
+    let observed: [[Double]]?
+    let projection: [[Double]]?
+
     var id: String { key }
 
     /// `state` is the whole answer; the server's chart_state already weighed
@@ -74,6 +84,8 @@ struct UsageWindow: Codable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case key, label, headline, advice, verdict, tone, state, kicker, detail, basis
+        case t0, t1, now, reference, observed, projection
+        case yMax      = "y_max"
         case usedPct   = "used_pct"
         case resetsAt  = "resets_at"
         case overCap   = "over_cap"

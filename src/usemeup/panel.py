@@ -669,6 +669,11 @@ MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "advice", "verdict", "
                   "state", "source", "kicker", "detail", "basis", "resets_at",
                   "over_cap")
 
+# The burn-up chart, for a client that draws it (the menu bar's drop-down
+# since 2026-09-25, which replaced sending people to the web page for it).
+SERIES_FIELDS = ("t0", "t1", "now", "y_max", "elapsed_pct",
+                 "reference", "observed", "projection")
+
 
 def _resets_in(ts: Optional[str]) -> Optional[int]:
     """Seconds from now until `ts`, floored at zero. The bar counts down between
@@ -750,7 +755,8 @@ def alert_for(w: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
 
 def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
-            priors: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            priors: Optional[Dict[str, Any]] = None,
+            series: bool = False) -> Dict[str, Any]:
     """The panel payload with the chart series dropped and a worst-window pick.
 
     A menu bar item polls this on a timer and needs two strings and a number,
@@ -758,6 +764,9 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
     falls from roughly 9 KB to under 1 KB. `worst` is resolved here so a client
     that pins one window to the bar can still colour the icon by the window that
     is actually in trouble.
+
+    `series=True` keeps the plotted series (SERIES_FIELDS) as well, for a
+    drop-down that draws the burn-up charts itself.
     """
     full = build(usage, limits, keys=MENUBAR_KEYS, priors=priors)
     if not full.get("ok"):
@@ -766,6 +775,8 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
     wins, alerts = [], []
     for w in full.get("windows") or []:
         c = {k: w[k] for k in MENUBAR_FIELDS if k in w}
+        if series:
+            c.update({k: w[k] for k in SERIES_FIELDS if k in w})
         c["resets_in"] = _resets_in(w.get("resets_at"))
         wins.append(c)
         a = alert_for(w)

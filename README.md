@@ -195,8 +195,23 @@ macOS asks for permission the first time there is something to say, not at
 launch. Settings has the switch, the current permission state, and a button
 that sends a test.
 
-Clicking the bar opens a panel with the same headline, verdict and reset
-countdown per window as the page.
+Clicking the bar opens a drop-down with, per window: the headline, any advice,
+the burn-up chart (used so far, where the current pace lands by reset, your
+working-day pace, the cap and now), the verdict and the reset countdown. The
+chart is drawn from the same series the server computes for the notch, so the
+two cannot disagree. The app no longer links to the web page; the page is still
+served for anyone running `usemeup` by hand, and it hides any window turned off
+in the app's Settings (it reads `~/.usemeup/windows.json`, as Transom does).
+
+### Where the item sits in the bar
+
+macOS puts a new menu bar item at the left end of the status area, which on a
+notched Mac, and in macOS 27's crowded-bar collapsing, is where items get hidden.
+The app therefore draws its own status item (AppKit, not SwiftUI's
+`MenuBarExtra`, which cannot be named) under the name `UseMeUp`, and on first
+launch asks macOS for the right-most slot a third-party item can have, just left
+of Control Center. Command-drag it anywhere else and macOS remembers that
+instead; the app only sets the position when none is stored.
 
 ```
 ./macapp/build.sh              build, install to /Applications, start at login

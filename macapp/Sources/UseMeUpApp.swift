@@ -4,29 +4,13 @@ import UserNotifications
 @main
 struct UseMeUpApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @ObservedObject private var store = UsageStore.shared
-    @ObservedObject private var bar = MenuBarAppearance.shared
-    /// Observed so the bar redraws the moment a window is turned on or off.
-    @ObservedObject private var prefs = WindowPrefs.shared
-    @AppStorage(PillStyle.key) private var styleRaw = PillStyle.fallback.rawValue
 
+    // The menu bar item is AppKit (StatusItemController), not MenuBarExtra,
+    // so the app can name it and ask for a place at the right end of the bar.
+    // The one SwiftUI scene left is Settings, which SettingsWindow opens.
     var body: some Scene {
-        MenuBarExtra {
-            PanelView().environmentObject(store)
-        } label: {
-            // The windows chosen in Settings, side by side, each coloured
-            // green, amber or red in the chosen style. See
-            // UsageStore.barSegments for what is shown and why.
-            Image(nsImage: BarLabel.image(store.barSegments,
-                                          style: PillStyle(rawValue: styleRaw) ?? .fallback,
-                                          dark: bar.dark,
-                                          allClear: store.barAllClear))
-                .accessibilityLabel(store.barSpoken)
-        }
-        .menuBarExtraStyle(.window)
-
         Settings {
-            SettingsView().environmentObject(store)
+            SettingsView().environmentObject(UsageStore.shared)
         }
     }
 }
@@ -37,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         UNUserNotificationCenter.current().delegate = presenter
+        StatusItemController.shared.install()
         UsageStore.shared.start()
         MenuBarAppearance.shared.start()
     }

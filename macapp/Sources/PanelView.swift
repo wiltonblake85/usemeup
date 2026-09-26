@@ -1,10 +1,13 @@
 import SwiftUI
 
+/// The drop-down under the menu bar item.
+///
+/// Since 2026-09-25 this is the whole detailed view: every window's figures
+/// and its burn-up chart. The app no longer sends anyone to the web page for
+/// the chart; the page still exists for whoever runs the server by hand.
 struct PanelView: View {
     @EnvironmentObject var store: UsageStore
     @ObservedObject private var prefs = WindowPrefs.shared
-    @Environment(\.openSettings) private var openSettings
-    @State private var tick = Date()
 
     /// Weekly windows first, the 5-hour window under them. The long windows are
     /// the ones you plan against; the short one is a footnote until it bites.
@@ -25,18 +28,20 @@ struct PanelView: View {
             } else if ordered.isEmpty {
                 problem(store.fetchError ?? "Waiting for the first reading…")
             } else {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(ordered) { w in WindowRow(window: w, tick: tick) }
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(ordered.enumerated()), id: \.element.id) { i, w in
+                        if i > 0 { Divider().padding(.vertical, 14) }
+                        WindowRow(window: w)
+                    }
                 }
-                .padding(14)
+                .padding(16)
             }
 
             Divider()
             footer
         }
-        .frame(width: 340)
+        .frame(width: 540)
         .onAppear { Task { await store.refresh() } }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { tick = $0 }
     }
 
     private var header: some View {
@@ -49,20 +54,19 @@ struct PanelView: View {
             .buttonStyle(.borderless)
             .help("Refresh now")
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
 
     private func problem(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(14)
+        Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(16)
     }
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !ordered.isEmpty { BurnLegend() }
             if let p = store.payload, let hours = p.hoursLabel, let days = p.sampleDays {
                 // The pace model is only as good as the rhythm behind it, so the
                 // rhythm is stated rather than hidden in a tooltip.
@@ -71,15 +75,14 @@ struct PanelView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 12) {
-                Button("Dashboard") { store.openDashboard() }
-                Button("Settings…") { NSApp.activate(); openSettings() }
+                Button("Settings…") { SettingsWindow.shared.show() }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
             }
             .buttonStyle(.borderless)
             .font(.system(size: 11))
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
 }
@@ -87,30 +90,24 @@ struct PanelView: View {
 private struct WindowRow: View {
     @EnvironmentObject var store: UsageStore
     let window: UsageWindow
-    let tick: Date
 
     private var support: String {
         [window.kicker, window.detail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(window.label).font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                Text(window.label).font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Text(window.shortPct)
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(window.severity == .calm ? Color.primary : window.severity.color)
             }
 
-            meter
-
             // Where it ends up, first and largest. The pace verdict describes
-            // the slope; the landing figure is the thing being asked about, and
-            // making the reader derive it from "a little under pace" is making
-            // them do the last step themselves.
+            // the slope; the landing figure is the thing being asked about.
             Text(window.headline.sentenceCased)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(window.severity == .calm ? Color.primary : window.severity.color)
@@ -119,9 +116,11 @@ private struct WindowRow: View {
             if let a = window.advice, !a.isEmpty {
                 Text(a)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            BurnChart(window: window)
+                .padding(.top, 4)
 
             Text(window.verdict.sentenceCased)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -130,20 +129,13 @@ private struct WindowRow: View {
             Text(support).font(.system(size: 10)).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let left = store.resetsIn(window) {
-                Text("Resets in \(left)").font(.system(size: 10)).foregroundStyle(.tertiary)
+            // Minutes are the finest unit shown, so a minute tick is enough,
+            // and a TimelineView stops ticking while the drop-down is closed.
+            TimelineView(.everyMinute) { _ in
+                if let left = store.resetsIn(window) {
+                    Text("Resets in \(left)").font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
             }
         }
-    }
-
-    private var meter: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.10))
-                Capsule().fill(window.severity.color)
-                    .frame(width: max(2, geo.size.width * min(window.usedPct, 100) / 100))
-            }
-        }
-        .frame(height: 4)
     }
 }
