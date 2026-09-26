@@ -59,7 +59,9 @@ final class UsageStore: ObservableObject {
 
     private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
-        c.timeoutIntervalForRequest = 8
+        // Long enough for a cold rebuild on a busy Mac. A timeout is a slow
+        // answer, not a dead server, and refresh() treats it that way.
+        c.timeoutIntervalForRequest = 30
         c.waitsForConnectivity = false
         return URLSession(configuration: c)
     }()
@@ -281,12 +283,18 @@ final class UsageStore: ObservableObject {
             })
         } catch {
             fetchError = error.localizedDescription
-            // The server went away: ours crashed, or the one we joined was
-            // stopped. Find or start one again rather than polling a dead port
-            // forever. A LaunchAgent restarts on its own; this waits for it.
+            // The server went away: ours exited, or nothing listens any more.
+            // Find or start one again rather than polling a dead port forever.
+            //
+            // Only on "nobody is there". A timeout means the server is busy,
+            // and asking again at once is how, in the first build of this,
+            // every slow answer turned into another request: each rebuild
+            // slowed the next until a poll took 44 seconds at 160% CPU.
             let ours = server.map { !$0.isRunning } ?? false
+            let gone = [URLError.cannotConnectToHost, .networkConnectionLost, .cannotFindHost]
+                .contains((error as? URLError)?.code ?? .unknown)
             let failed: Bool = { if case .failed = link { return true } else { return false } }()
-            if ours || link == .attached || failed {
+            if ours || (gone && (link == .attached || failed)) {
                 if ours { server = nil }
                 Task { await bringUpServer() }
             }

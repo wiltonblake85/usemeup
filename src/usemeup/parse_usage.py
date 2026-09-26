@@ -259,6 +259,25 @@ def by_hour(db, prices, days=None):
             "dow_cost": [[round(x, 4) for x in row] for row in dow]}
 
 
+def rhythm():
+    """Only what the pace model reads: by_hour, with the account-wide `api` hours.
+
+    panel.build, panel.menubar and status.build look at nothing else in the
+    usage payload. Building just this skips every other aggregate (by day,
+    model, project, source, sessions, blocks), which build() recomputes over
+    the whole index. The server caches it for TTL_RHYTHM, because a weekly
+    rhythm drawn from months of history does not move minute to minute.
+    """
+    prices = _pricing()
+    db = store.connect()
+    try:
+        hourly = by_hour(db, prices)
+    finally:
+        db.close()
+    hourly["api"] = api_hours()
+    return hourly
+
+
 def build(block_days=30, day_limit=120):
     prices = _pricing()
     db = store.connect()

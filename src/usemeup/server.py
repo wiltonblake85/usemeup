@@ -6,6 +6,7 @@ Binds 127.0.0.1, so nothing outside this machine can reach it.
 
   GET /             index.html
   GET /api/usage    aggregates from the local index (no network)
+  GET /api/rhythm   only the working-day rhythm the pace model reads (by_hour)
   GET /api/limits   live rate-limit state (reads Keychain, calls api.anthropic.com;
                     or, with USEMEUP_SOURCE=statusline, reads a local file only)
   GET /api/panel    the two weekly burn-up charts, pace already applied
@@ -66,6 +67,8 @@ _cache = {"usage": None, "usage_at": 0, "limits": None, "limits_at": 0, "ingest"
 _lock = threading.Lock()
 
 TTL_USAGE, TTL_INGEST = 60, 120
+# The working-day rhythm is months of history; a quarter hour is plenty fresh.
+TTL_RHYTHM = 900
 # History moves over days. Rebuilding it reads the whole sample table.
 TTL_PRIORS = 900
 # The usage endpoint rate limits an over-eager client; 45s earned a 429. These
@@ -105,26 +108,60 @@ def _priors():
     """
     if _cache["priors"] is not None and time.time() - _cache["priors_at"] < TTL_PRIORS:
         return _cache["priors"]
-    out = {}
-    try:
-        wins = (_limits() or {}).get("windows") or []
-        secs = {w.get("key"): w.get("window_seconds") for w in wins}
-        current = {w.get("key"): history.window_id(w.get("resets_at")) for w in wins}
-        samples, _names = store.all_limit_samples("2000-01-01T00:00:00+00:00")
-        out = history.priors(samples, secs, current)
-    except Exception:
-        out = {}      # no history is a valid answer; the panel says so
-    _cache["priors"], _cache["priors_at"] = out, time.time()
-    return out
+    wins = (_limits() or {}).get("windows") or []      # outside the lock: _limits has its own
+    with _priors_lock:
+        if _cache["priors"] is not None and time.time() - _cache["priors_at"] < TTL_PRIORS:
+            return _cache["priors"]                     # built while this caller waited
+        out = {}
+        try:
+            secs = {w.get("key"): w.get("window_seconds") for w in wins}
+            current = {w.get("key"): history.window_id(w.get("resets_at")) for w in wins}
+            samples, _names = store.all_limit_samples("2000-01-01T00:00:00+00:00")
+            out = history.priors(samples, secs, current)
+        except Exception:
+            out = {}      # no history is a valid answer; the panel says so
+        _cache["priors"], _cache["priors_at"] = out, time.time()
+        return out
+
+
+# One rebuild at a time. Without these, callers that arrive together (the menu
+# bar, the sampler, a page) each rebuilt the same payload in parallel under the
+# GIL, every one of them slower for the others; on 2026-09-25 that pushed a cold
+# /api/menubar to 44 seconds.
+_usage_lock = threading.Lock()
+_rhythm_lock = threading.Lock()
+_priors_lock = threading.Lock()
 
 
 def _usage():
+    """Every transcript aggregate. Only /api/usage and /api/export need this."""
     _maybe_ingest()
-    if not _cache["usage"] or time.time() - _cache["usage_at"] > TTL_USAGE:
-        d = parse_usage.build()
-        d["ingest"] = _cache["ingest"]
-        _cache["usage"], _cache["usage_at"] = d, time.time()
+    with _usage_lock:
+        if not _cache["usage"] or time.time() - _cache["usage_at"] > TTL_USAGE:
+            d = parse_usage.build()
+            d["ingest"] = _cache["ingest"]
+            _cache["usage"], _cache["usage_at"] = d, time.time()
     return _cache["usage"]
+
+
+def _rhythm():
+    """The usage-shaped dict the pace model reads: {"by_hour": ...} and no more.
+
+    panel.build, panel.menubar and status.build take a `usage` argument but
+    only ever read usage["by_hour"]. Handing them this instead of _usage()
+    keeps the every-minute menu bar poll from rebuilding every aggregate.
+    """
+    _maybe_ingest()
+    with _rhythm_lock:
+        if _cache.get("rhythm") is None or time.time() - _cache.get("rhythm_at", 0) > TTL_RHYTHM:
+            try:
+                _cache["rhythm"] = {"by_hour": parse_usage.rhythm(), "demo": config.DEMO}
+            except Exception as e:
+                # No rhythm is a valid answer: the pace model falls back to the clock.
+                _cache["rhythm"] = {"by_hour": None, "demo": config.DEMO,
+                                    "error": "%s: %s" % (type(e).__name__, e)}
+            _cache["rhythm_at"] = time.time()
+    return _cache["rhythm"]
 
 
 _limits_lock = threading.Lock()
@@ -199,7 +236,7 @@ def _write_status():
     sampler, and the error is kept where /api/limits can show it.
     """
     try:
-        status.write(status.build(_usage(), _limits(), _priors()))
+        status.write(status.build(_rhythm(), _limits(), _priors()))
         _cache["status_error"] = None
     except Exception as e:
         _cache["status_error"] = "%s: %s" % (type(e).__name__, e)
@@ -259,21 +296,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._send(200, f.read(), "text/html; charset=utf-8")
             if path == "/api/usage":
                 return self._send(200, json.dumps(_usage(), default=str), "application/json")
+            if path == "/api/rhythm":
+                return self._send(200, json.dumps(_rhythm(), default=str), "application/json")
             if path == "/api/limits":
                 return self._send(200, json.dumps(_limits(), default=str), "application/json")
             if path == "/api/panel":
-                # Both halves come from the cache _limits() and _usage() already
+                # Both halves come from the cache _limits() and _rhythm() already
                 # own, so a client polling this adds no api.anthropic.com traffic
                 # and no extra ingest, however often it asks.
                 return self._send(200, json.dumps(
-                    panel.build(_usage(), _limits(), priors=_priors()), default=str),
+                    panel.build(_rhythm(), _limits(), priors=_priors()), default=str),
                     "application/json")
             if path == "/api/menubar":
                 # Same model as /api/panel, minus the plotted series. A menu
                 # bar polls on a timer forever, so it gets its own shape
                 # rather than pulling 9 KB of chart points every minute.
                 return self._send(200, json.dumps(
-                    panel.menubar(_usage(), _limits(), _priors()), default=str),
+                    panel.menubar(_rhythm(), _limits(), _priors()), default=str),
                     "application/json")
             if path == "/api/ingest":
                 _cache["usage"] = None
