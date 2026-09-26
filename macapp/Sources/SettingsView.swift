@@ -96,7 +96,7 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .formStyle(.grouped)
-        .frame(width: 400)
+        .frame(minWidth: 400)
         .padding(.vertical, 8)
     }
 
@@ -150,10 +150,12 @@ private struct StylePreview: View {
     let style: PillStyle
     let dark: Bool
 
+    // One pill per colour. No model-scoped window in the sample: the one this
+    // account had (Fable) is retired, and a preview should not advertise it.
     private static let sample: [UsageWindow] = [
-        sampleWindow("weekly_scoped", "Fable", 94, "alert"),
-        sampleWindow("weekly_all", "All models", 71, "watch"),
-        sampleWindow("session", "5-hour", 22, "ok"),
+        sampleWindow("weekly_all", "All models", 94, "alert"),
+        sampleWindow("session", "5-hour", 71, "watch"),
+        sampleWindow("weekly_oauth_apps", "Apps", 22, "ok"),
     ]
 
     var body: some View {

@@ -113,10 +113,18 @@ final class SettingsWindow {
         StatusItemController.shared.closePanel()
         if window == nil {
             let host = NSHostingController(rootView: SettingsView().environmentObject(UsageStore.shared))
-            host.sizingOptions = [.preferredContentSize]
+            // A fixed size, not sizing to content: SettingsView is a grouped
+            // Form, which scrolls and so has no height of its own. Letting the
+            // window follow it looped the layout until AppKit gave up and
+            // terminated the app (NSGenericException, "more Update
+            // Constraints in Window passes than there are views"), seen
+            // 2026-09-25 on the first click of Settings.
+            host.sizingOptions = []
             let w = NSWindow(contentViewController: host)
             w.title = "UseMeUp Settings"
-            w.styleMask = [.titled, .closable]
+            w.styleMask = [.titled, .closable, .resizable]
+            w.setContentSize(NSSize(width: 420, height: 640))
+            w.contentMinSize = NSSize(width: 420, height: 360)
             w.isReleasedWhenClosed = false
             w.center()
             window = w
