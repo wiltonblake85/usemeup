@@ -56,8 +56,8 @@ week around.
 
 One card, **Rate limit windows**, with a block for each window the API reports:
 the 5-hour session window, the 7-day window across all models, and any 7-day
-window scoped to one model (on my plan that is "Fable only", and it is usually
-the one that binds).
+window scoped to one model. A window turned off in the menu bar app's Settings
+is left off the page too; the server keeps measuring it.
 
 Each block leads with where the window ends up, in words: *landing near 92% at
 reset*, or *runs out around Tuesday 9:25 AM*. Under that sit the pace verdict
@@ -154,11 +154,16 @@ near-empty days that had been busy.
 ## The menu bar app (macOS)
 
 `macapp/` is a small SwiftUI front end over the same local server. The bar shows
-every weekly window side by side, the model-scoped one first:
+the windows you choose in Settings, side by side:
 
 ```
-[F 69%] [All 60%]
+[All 60%] [5h 22%]
 ```
+
+Each window is set to show always, only while it is amber or red, or not at all.
+Out of the box the weekly windows always show and the 5-hour window shows only
+when it is in trouble. A model-scoped window for a model you have stopped using
+is best turned off: it would otherwise sit at 0% taking up room.
 
 Each window is a small filled pill: green while it is fine, amber when you are
 ahead of pace, red when the limit itself is in play. The first version drew grey
@@ -167,14 +172,14 @@ menu bar takes its tint from the wallpaper behind it, so text drawn onto it has
 no contrast you can count on. A pill carries its own background, with white text
 on green and red and near-black on amber, and it reads the same over anything.
 
-A window at its cap reads `spent`. The 5-hour window joins the others only while
-it is amber or red: most days it is noise, but when it hits the wall it blocks
-every model.
+A window at its cap reads `spent`. The 5-hour window's default is "only when
+amber or red" because most days it is noise, but when it hits the wall it
+blocks every model.
 
 An earlier build let the single worst window take over the bar. That hid the
-wrong thing. Once Fable is nearly spent I stop using Fable, that question's
-closed, and the all-models figure is the one I need next. It shouldn't be
-pushed out of view by a window I have already acted on.
+wrong thing. Once a model-scoped window is nearly spent you stop using that
+model, that question is closed, and the all-models figure is the one you need
+next. It shouldn't be pushed out of view by a window you have already acted on.
 
 ### One notification per window, not a stream of them
 

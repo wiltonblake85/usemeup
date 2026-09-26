@@ -149,6 +149,43 @@ def excluded(path):
     return any(part in EXCLUDE_SLUGS for part in parts)
 
 
+# ---------------------------------------------------------------- walking
+# Where transcripts can be. The Cowork root is mostly not transcripts: on
+# 2026-09-25 it was 11 GB, 40,581 files in 26,543 folders, of which 3,492 were
+# transcripts, every one of them under a `.claude/projects/` folder. The rest is
+# each session's outputs, uploads, tool results, backups, plugins and skills.
+# Walking all of it every two minutes cost about 2.5 s a pass.
+#
+# Checked before this rule shipped (2026-09-26): the full walk found 3,501
+# .jsonl files and this one 3,492. The 9 it skips are all in session
+# `outputs/` folders (batch results, scraped data), none with a single "usage"
+# line, so the rule drops no transcript. Folders visited fell from 26,543 to
+# 10,234. The shim, skill, plugin and marketplace folders are the app's own
+# tooling, copied into every session.
+NON_TRANSCRIPT_DIRS = frozenset({
+    "outputs", "uploads", "uploads-tmp",            # the session's files, not its transcript
+    "shim-perm", "shim-lib",                        # per-session tooling
+    "skills", "plugins", "marketplaces",            # installed skills and plugins
+    "node_modules", ".git",
+})
+_PROJECTS = os.sep + ".claude" + os.sep + "projects" + os.sep
+
+
+def prune(dirpath, dirnames):
+    """Trim an os.walk dirnames list in place to where transcripts can be.
+
+    Inside a `.claude` folder, only `projects` is walked. Everywhere else
+    outside `.claude/projects`, folders named in NON_TRANSCRIPT_DIRS are
+    skipped. Inside `.claude/projects` (which is also the whole CLI root)
+    nothing is pruned. store.py and verify.py both call this, so they always
+    agree on which files exist, as they do on `excluded`.
+    """
+    if os.path.basename(dirpath) == ".claude":
+        dirnames[:] = [d for d in dirnames if d == "projects"]
+    elif _PROJECTS not in dirpath + os.sep:
+        dirnames[:] = [d for d in dirnames if d not in NON_TRANSCRIPT_DIRS]
+
+
 # Claude Code writes placeholder assistant messages with this model name (for
 # example when a request fails before a response arrives). They carry a usage
 # block of all zeros and are not API calls, so they are not counted at all.

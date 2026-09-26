@@ -44,3 +44,32 @@ class Synthetic(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Prune(unittest.TestCase):
+    """config.prune: the walk only goes where transcripts can be (2026-09-26)."""
+
+    def pruned(self, dirpath, names):
+        names = list(names)
+        config.prune(dirpath, names)
+        return names
+
+    def test_inside_dot_claude_only_projects_is_walked(self):
+        self.assertEqual(self.pruned("/s/abc/local_1/.claude",
+                                     ["projects", "plugins", "skills", "telemetry"]),
+                         ["projects"])
+
+    def test_session_output_and_upload_folders_are_skipped(self):
+        self.assertEqual(self.pruned("/s/abc/local_1",
+                                     [".claude", "outputs", "uploads", "uploads-tmp", "x"]),
+                         [".claude", "x"])
+
+    def test_nothing_is_pruned_inside_projects(self):
+        # A Claude Code project folder can be named after an outputs folder,
+        # and the CLI root is itself a projects folder.
+        names = ["outputs", "uploads", "subagents", "abc"]
+        self.assertEqual(self.pruned(os.path.join(config.CLI_ROOT, "-Users-x-outputs"), names),
+                         names)
+        self.assertEqual(self.pruned("/s/abc/local_1/.claude/projects/-sessions-x/abc", names),
+                         names)
+        self.assertEqual(self.pruned(config.CLI_ROOT, names), names)

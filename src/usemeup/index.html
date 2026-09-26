@@ -480,8 +480,41 @@ function dailyChart(w, W) {
   // The axis follows what was spent, not what could be: after a quiet stretch
   // the available figure can be four times the share and would flatten the bars.
   const maxV = Math.max(share * 2.2, ...days.map(d => d.consumed_pct * 1.15));
-  const H = W < NARROW ? 204 : 224, PL = 40, PR = 12, PT = 32, PB = 32;   // PT leaves room for a gap bracket
-  const iw = W - PL - PR, ih = H - PT - PB;
+  const PL = 40, PR = 12, PB = 32, ih = W < NARROW ? 140 : 160;
+  const iw = W - PL - PR;
+
+  // Unsampled stretches that crossed a day boundary get a bracket over the
+  // days they touch. Laid out before anything else, because their labels
+  // decide how much headroom the chart needs: each label goes in the first row
+  // where it clears the one before it. Before 2026-09-26 every label shared one
+  // row, and two gaps a day apart printed on top of each other.
+  const wkStart = new Date(wk.window_start).getTime();
+  const tx = t => PL + iw * Math.max(0, Math.min(1, (new Date(t).getTime() - wkStart) / (7 * 86400000)));
+  const gapMarks = [];
+  (wk.gaps || []).forEach(gp => {
+    const days_ = gp.seconds / 86400;
+    const b0 = Math.floor((new Date(gp.start).getTime() - wkStart) / 86400000);
+    const b1 = Math.floor((new Date(gp.end).getTime() - wkStart - 1) / 86400000);
+    if (b0 === b1 && gp.seconds < 6 * 3600) return;   // brief and inside one day: the hatch says enough
+    const x0 = tx(gp.start), x1 = tx(gp.end);
+    if (x1 - x0 < 24) return;
+    const label = `${gp.pct.toFixed(1)}% over ${days_ >= 1 ? days_.toFixed(1) + " days" : Math.round(gp.seconds / 3600) + " h"} not sampled, timing unknown`;
+    gapMarks.push({ x0, x1, label, w: label.length * 5.3 });   // 10px text, about 5.3px a character
+  });
+  const rowEnds = [];
+  gapMarks.sort((a, b) => a.x0 - b.x0).forEach(m => {
+    // Centred over its bracket, but never hanging off either edge of the chart.
+    m.cx = Math.min(Math.max((m.x0 + m.x1) / 2, PL + m.w / 2), W - PR - m.w / 2);
+    let r = rowEnds.findIndex(end => end + 8 <= m.cx - m.w / 2);
+    if (r < 0) { r = rowEnds.length; rowEnds.push(0); }
+    rowEnds[r] = m.cx + m.w / 2;
+    m.row = r;
+  });
+  // Room above the plot for "avail" on today's bar (drawn just above the top
+  // edge when it is off the axis) and then one line per bracket row.
+  const ROW = 22;   // a label and its bracket; the next row's ticks clear this row's text
+  const PT = 20 + ROW * rowEnds.length;
+  const H = PT + ih + PB;
   const step = iw / 7, bw = Math.min(64, step * 0.62);
   const y = v => PT + ih - ih * Math.max(0, v) / maxV;
   const ink = cssv("--text-primary"), muted = cssv("--text-muted"), line = cssv("--line");
@@ -543,23 +576,15 @@ function dailyChart(w, W) {
       <text x="${xm}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="${today ? ink : muted}"
         font-weight="${today ? 600 : 400}">${esc(fmtDay(d.start))}</text>`;
   });
-  // Unsampled stretches that crossed a day boundary: a bracket over the days
-  // they touch, with the amount that accrued. The hatched bars under it are an
-  // even spread, which claims nothing about when inside the gap it happened.
-  const wkStart = new Date(wk.window_start).getTime();
-  const tx = t => PL + iw * Math.max(0, Math.min(1, (new Date(t).getTime() - wkStart) / (7 * 86400000)));
+  // The gap brackets laid out above. The amount is what accrued while nothing
+  // was sampling; the hatched bars under it are an even spread, which claims
+  // nothing about when inside the gap it happened.
   let brackets = "";
-  (wk.gaps || []).forEach((gp, k) => {
-    const days_ = gp.seconds / 86400;
-    const b0 = Math.floor((new Date(gp.start).getTime() - wkStart) / 86400000);
-    const b1 = Math.floor((new Date(gp.end).getTime() - wkStart - 1) / 86400000);
-    if (b0 === b1 && gp.seconds < 6 * 3600) return;   // brief and inside one day: the hatch says enough
-    const x0 = tx(gp.start), x1 = tx(gp.end), yb = PT - 6;
-    if (x1 - x0 < 24) return;
-    const label = `${gp.pct.toFixed(1)}% over ${days_ >= 1 ? days_.toFixed(1) + " days" : Math.round(gp.seconds / 3600) + " h"} not sampled, timing unknown`;
-    brackets += `<path d="M${x0.toFixed(1)},${yb + 5} L${x0.toFixed(1)},${yb} L${x1.toFixed(1)},${yb} L${x1.toFixed(1)},${yb + 5}"
+  gapMarks.forEach(m => {
+    const yb = PT - 20 - ROW * m.row;
+    brackets += `<path d="M${m.x0.toFixed(1)},${yb + 5} L${m.x0.toFixed(1)},${yb} L${m.x1.toFixed(1)},${yb} L${m.x1.toFixed(1)},${yb + 5}"
         fill="none" stroke="${muted}" stroke-width="1"/>
-      <text x="${((x0 + x1) / 2).toFixed(1)}" y="${yb - 3}" text-anchor="middle" font-size="10" fill="${muted}">${esc(label)}</text>`;
+      <text x="${m.cx.toFixed(1)}" y="${yb - 4}" text-anchor="middle" font-size="10" fill="${muted}">${esc(m.label)}</text>`;
   });
   return `<svg viewBox="0 0 ${W} ${H}" role="img" data-daily="1"
     aria-label="${esc(w.name)} as seven daily buckets of ${share.toFixed(1)}% each">${g}${bars}${brackets}</svg>`;

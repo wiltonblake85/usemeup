@@ -85,9 +85,11 @@ def recount():
     for root in roots:
         if not os.path.isdir(root):
             continue
-        for dirpath, _dn, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root):
             if config.excluded(dirpath):
+                dirnames[:] = []
                 continue
+            config.prune(dirpath, dirnames)     # the same rule store._walk uses
             for fn in filenames:
                 if not fn.endswith(".jsonl") or fn == "audit.jsonl":
                     continue

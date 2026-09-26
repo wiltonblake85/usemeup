@@ -137,11 +137,13 @@ def _walk():
     for root, source in roots:
         if not os.path.isdir(root):
             continue
-        for dirpath, _dn, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root):
             # Skip the throwaway sessions this tool makes to refresh the token.
             # Same rule for both roots; verify.py applies the identical one.
             if config.excluded(dirpath):
+                dirnames[:] = []
                 continue
+            config.prune(dirpath, dirnames)     # only where transcripts can be
             for fn in filenames:
                 # audit.jsonl is an event log, not a transcript; it has no usage.
                 if fn.endswith(".jsonl") and fn != "audit.jsonl":
