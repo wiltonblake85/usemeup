@@ -81,6 +81,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>UseMeUp</string>
   <key>CFBundleDisplayName</key><string>UseMeUp</string>
   <key>CFBundleExecutable</key><string>UseMeUp</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>com.wiltonblake.usemeup.menubar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -92,6 +93,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# App icon: the committed PNG set (macapp/icon/make_icon.py) packed into .icns.
+iconutil -c icns "$MACAPP/icon/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns" \
+  || { echo "iconutil failed on macapp/icon/AppIcon.iconset"; exit 1; }
 
 if [ -d "$BUILD/pyi-dist/usemeup-server" ]; then
   cp -R "$BUILD/pyi-dist/usemeup-server" "$APP/Contents/Resources/server"
