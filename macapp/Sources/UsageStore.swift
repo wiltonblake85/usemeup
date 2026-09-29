@@ -113,12 +113,24 @@ final class UsageStore: ObservableObject {
     /// shows a check rather than the "--" that means no reading at all.
     var barAllClear: Bool { barSegments.isEmpty && !allWindows.isEmpty }
 
+    /// Whether the figures on hand are current. The server decides (panel.is_live):
+    /// false while Claude Code is signed out, or once a failed reading has
+    /// outlasted its grace period. A server older than this field is live.
+    var isLive: Bool { payload?.live ?? true }
+
     /// The same thing in words, for VoiceOver and the tooltip.
     var barSpoken: String {
-        if barAllClear { return "Nothing needs attention" }
-        return barSegments.isEmpty ? "No reading yet"
+        if payload?.signin?.signedOut == true, barSegments.isEmpty {
+            return "Claude Code is signed out"
+        }
+        if barAllClear { return isLive ? "Nothing needs attention" : "Not live" }
+        let figures = barSegments.isEmpty ? "No reading yet"
             : barSegments.map { "\($0.label) \($0.barValue)" }
                 .joined(separator: ", ")
+        guard !isLive, !barSegments.isEmpty else { return figures }
+        let why = payload?.signin?.signedOut == true ? "Claude Code is signed out" : "Not live"
+        let when = payload?.staleLabel.map { "figures from \($0)" } ?? "earlier figures"
+        return "\(why). Showing \(when): \(figures)"
     }
 
     // ---------------------------------------------------------------- lifecycle

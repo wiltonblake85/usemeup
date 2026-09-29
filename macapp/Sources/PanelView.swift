@@ -21,18 +21,40 @@ struct PanelView: View {
             header
             Divider()
 
+            // First, above the figures: when the sign-in needs doing, nothing
+            // below it can be trusted to stay current until it is done.
+            if !linkFailed, let s = store.payload?.signin, s.message != nil {
+                SignInNotice(info: s).padding(16)
+                Divider()
+            }
+
             if case .failed(let why) = store.link {
                 problem(why)
             } else if ordered.isEmpty && !store.allWindows.isEmpty {
                 problem("Every window is turned off. Choose which to show in Settings.")
             } else if ordered.isEmpty {
-                problem(firstRunHint(store.fetchError) ?? "Waiting for the first reading…")
+                // A signed-out Mac already said why above; repeating the
+                // server's error under it would say it twice.
+                if store.payload?.signin?.signedOut != true {
+                    problem(firstRunHint(store.fetchError) ?? "Waiting for the first reading…")
+                }
             } else {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(ordered.enumerated()), id: \.element.id) { i, w in
-                        if i > 0 { Divider().padding(.vertical, 14) }
-                        WindowRow(window: w)
+                    if !store.isLive, store.payload?.signin?.signedOut != true {
+                        Text("Not live: these figures are from \(store.payload?.staleLabel ?? "an earlier reading"). UseMeUp keeps trying.")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.bottom, 12)
                     }
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(ordered.enumerated()), id: \.element.id) { i, w in
+                            if i > 0 { Divider().padding(.vertical, 14) }
+                            WindowRow(window: w)
+                        }
+                    }
+                    // Faded, not hidden: the last figures are still worth
+                    // seeing, as long as nobody mistakes them for current ones.
+                    .opacity(store.isLive ? 1 : 0.5)
                 }
                 .padding(16)
             }
@@ -42,6 +64,11 @@ struct PanelView: View {
         }
         .frame(width: 540)
         .onAppear { Task { await store.refresh() } }
+    }
+
+    private var linkFailed: Bool {
+        if case .failed = store.link { return true }
+        return false
     }
 
     private var header: some View {

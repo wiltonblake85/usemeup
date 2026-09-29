@@ -57,6 +57,9 @@ enum BarLabel {
     private static let gap: CGFloat = 4          // between pills
     private static let radius: CGFloat = 4
     private static let dotSize: CGFloat = 7
+    /// Strength of a label whose figures are not live: still legible, but
+    /// plainly not the same as a current reading beside the clock.
+    private static let fadedAlpha: CGFloat = 0.38
 
     private static func srgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> NSColor {
         NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
@@ -212,8 +215,14 @@ enum BarLabel {
     /// `dark` is the menu bar's appearance. The caller passes it rather than
     /// this reading it at draw time, because SwiftUI may rasterise the image
     /// once, under an appearance that is not the menu bar's.
+    ///
+    /// `faded` draws the whole label at reduced strength: figures that are no
+    /// longer live (Claude Code signed out, or readings failing past the
+    /// server's grace period). Before 2026-09-29 a stale label was drawn at
+    /// full colour, and a signed-out Mac showed 2:47 AM figures as current
+    /// until mid-afternoon.
     static func image(_ windows: [UsageWindow], style: PillStyle = .fallback, dark: Bool,
-                      allClear: Bool = false) -> NSImage {
+                      allClear: Bool = false, faded: Bool = false) -> NSImage {
         guard !windows.isEmpty else {
             // "--" is no reading yet. A check is readings in hand with nothing
             // set to show right now (every window left on is "only when amber
@@ -223,6 +232,7 @@ enum BarLabel {
             let dash = str(allClear ? "✓" : "--", font, .black)
             let size = dash.size()
             let img = NSImage(size: NSSize(width: ceil(size.width), height: height), flipped: false) { r in
+                if faded { NSGraphicsContext.current?.cgContext.setAlpha(fadedAlpha) }
                 dash.draw(at: NSPoint(x: 0, y: (r.height - size.height) / 2)); return true
             }
             img.isTemplate = true
@@ -232,6 +242,7 @@ enum BarLabel {
         let widths = windows.map { width($0, style) }
         let total = widths.reduce(0, +) + sp * CGFloat(windows.count - 1)
         let img = NSImage(size: NSSize(width: total, height: height), flipped: false) { r in
+            if faded { NSGraphicsContext.current?.cgContext.setAlpha(fadedAlpha) }
             var x: CGFloat = 0
             for (w, wd) in zip(windows, widths) {
                 draw(w, style, x: x, width: wd, in: r, dark: dark)

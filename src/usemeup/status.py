@@ -19,6 +19,10 @@ What is in it:
                      showing the figures. The policy lives here, not in each
                      reader, so every surface goes blank at the same moment.
   stale              the last probe failed and these are the last good figures
+  live               false once those figures should stop passing as current
+                     (signed out, or stale for over panel.LIVE_GRACE_SECONDS)
+  signin             Claude Code's sign-in: state, ends_at, ends_label, and a
+                     message when something needs doing (panel.signin_view)
   ok, hours_per_day, hours_label, sample_days
   windows            one entry per window, the full panel shape: headline,
                      advice, verdict, state, and the reference / observed /
@@ -58,6 +62,11 @@ def build(usage, limits, priors=None, now=None):
         "checked_at": full.get("checked_at"),
         "fresh_for_seconds": FRESH_FOR_SECONDS,
         "stale": bool((limits or {}).get("stale")),
+        # Added 2026-09-29, both optional for a reader. `live` is false once a
+        # stale reading should stop being presented as current; `signin` says
+        # where Claude Code's sign-in stands, with a sentence when it needs doing.
+        "live": panel.is_live(limits or {}),
+        "signin": panel.signin_view(limits or {}),
         "source": (limits or {}).get("strategy"),
         "ok": bool(full.get("ok")),
         "error": full.get("error"),

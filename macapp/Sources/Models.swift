@@ -93,6 +93,29 @@ struct UsageWindow: Codable, Identifiable {
     }
 }
 
+/// Where Claude Code's sign-in on this Mac stands (panel.signin_view on the
+/// server). The server writes the sentence; the app only decides where it goes.
+struct SignInInfo: Codable, Equatable {
+    /// ok, expiring, signed_out, missing, unknown
+    let state: String
+    /// "Thu Oct 29 at 4:50 AM", on this Mac's clock.
+    let endsLabel: String?
+    /// Present only when something needs doing.
+    let message: String?
+    /// "watch" (amber) or "alert" (red), the same words the windows use.
+    let tone: String?
+    /// The button's title: "Sign in" or "Sign in again".
+    let action: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state, message, tone, action
+        case endsLabel = "ends_label"
+    }
+
+    var severity: Severity { tone == "alert" ? .alert : (tone == "watch" ? .watch : .calm) }
+    var signedOut: Bool { state == "signed_out" || state == "missing" }
+}
+
 struct MenuBarPayload: Codable {
     let ok: Bool
     let error: String?
@@ -104,13 +127,25 @@ struct MenuBarPayload: Codable {
     let windows: [UsageWindow]
     /// Absent from a server older than the app; treated as none.
     let alerts: [UsageAlert]?
+    /// Added 2026-09-29; absent from an older server, which never says either.
+    let signin: SignInInfo?
+    /// False once the figures should stop passing as current: signed out, or
+    /// stale past the server's grace period. Absent means live.
+    let live: Bool?
+    /// When the figures on hand were last true, while they are stale.
+    let staleSince: String?
+    /// The same moment as this Mac's clock reads it: "2:47 AM", or
+    /// "Mon Sep 28 at 11:02 PM" on another day.
+    let staleLabel: String?
 
     enum CodingKeys: String, CodingKey {
-        case ok, error, worst, windows, alerts
+        case ok, error, worst, windows, alerts, signin, live
         case checkedAt  = "checked_at"
         case hoursPerDay = "hours_per_day"
         case hoursLabel = "hours_label"
         case sampleDays = "sample_days"
+        case staleSince = "stale_since"
+        case staleLabel = "stale_label"
     }
 }
 

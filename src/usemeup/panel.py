@@ -754,6 +754,133 @@ def alert_for(w: Dict[str, Any]) -> Optional[Dict[str, str]]:
             "body": ("%.0f%% used. %s %s" % (used, tail, w.get("advice") or "")).strip()}
 
 
+# ---------------------------------------------------------------- sign-in
+
+# A stale reading keeps its colours this long before the bar stops presenting
+# it as live. Long enough that one failed probe after the Mac wakes (the
+# network is not up yet) does not flicker the bar; short enough that nobody
+# plans an afternoon on a figure from the morning. A signed-out Mac is not
+# live at once: nothing will change until someone signs in.
+LIVE_GRACE_SECONDS = 20 * 60
+_NOT_LIVE_AT_ONCE = ("signed_out", "no_credential")
+
+
+def _fmt_when(epoch: Optional[float], now: Optional[float] = None,
+              dated: bool = False) -> Optional[str]:
+    """"2:47 AM" today, "Thu Oct 29 at 4:50 AM" on any other day, or always
+    with `dated`. Local clock."""
+    if epoch is None:
+        return None
+    d = _dt.datetime.fromtimestamp(epoch)
+    n = _dt.datetime.fromtimestamp(now) if now is not None else _dt.datetime.now()
+    hm = d.strftime("%I:%M %p").lstrip("0")
+    if d.date() == n.date() and not dated:
+        return hm
+    return "%s %d at %s" % (d.strftime("%a %b"), d.day, hm)
+
+
+def _in_words(seconds: Optional[int]) -> Optional[str]:
+    if seconds is None:
+        return None
+    if seconds >= 36 * 3600:
+        return "in %d days" % round(seconds / 86400.0)
+    if seconds >= 20 * 3600:
+        return "in about a day"
+    if seconds >= 2 * 3600:
+        return "in %d hours" % round(seconds / 3600.0)
+    return "within the next couple of hours" if seconds > 0 else "now"
+
+
+def is_live(limits: Dict[str, Any], now: Optional[float] = None) -> bool:
+    """Whether the figures on hand should still be presented as current."""
+    if not limits or not limits.get("ok"):
+        return False
+    if not limits.get("stale"):
+        return True
+    if limits.get("stale_kind") in _NOT_LIVE_AT_ONCE:
+        return False
+    since = _parse(limits.get("stale_since"))
+    now = now if now is not None else _dt.datetime.now(_dt.timezone.utc).timestamp()
+    return since is not None and now - since < LIVE_GRACE_SECONDS
+
+
+def signin_view(limits: Dict[str, Any], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """What every surface says about Claude Code's sign-in, as sentences.
+
+    Built from rate_limits.signin_summary, which the server attaches to every
+    probe of the usage endpoint. None with the status line source, which reads
+    no credential, and None while the sign-in has more than
+    rate_limits.SIGNIN_WARN_SECONDS to run: the state is always there for
+    Settings to show, but `message` only exists when something needs doing.
+
+    Fields: state, ends_at, ends_label, seconds_left, message, tone ("watch"
+    or "alert", the panel's own words for amber and red), action.
+    """
+    s = (limits or {}).get("signin")
+    if not s:
+        return None
+    now = now if now is not None else _dt.datetime.now(_dt.timezone.utc).timestamp()
+    state = s.get("state")
+    ends = _parse(s.get("ends_at"))
+    left = s.get("seconds_left")
+    if ends is not None:
+        left = max(0, int(ends - now))
+    out = {"state": state, "ends_at": s.get("ends_at"), "seconds_left": left,
+           "ends_label": _fmt_when(ends, now, dated=True), "message": None, "tone": None,
+           "action": None}
+
+    if state == "expiring":
+        out.update(tone="watch", action="Sign in again",
+                   message="Claude Code's sign-in on this Mac ends %s, on %s. UseMeUp reads "
+                           "your limits through it, so sign in again before then to start "
+                           "a fresh one." % (_in_words(left), out["ends_label"]))
+    elif state == "signed_out":
+        since = _parse(limits.get("stale_since")) if limits.get("stale") else None
+        figures = "UseMeUp cannot read your limits"
+        if since is not None:
+            w = _fmt_when(since, now)
+            figures = "these figures stopped updating %s %s" % ("on" if " at " in w else "at", w)
+        out.update(tone="alert", action="Sign in",
+                   message="Claude Code is signed out on this Mac, so %s. Sign in to bring "
+                           "them back." % figures)
+    elif state == "missing":
+        out.update(tone="alert", action="Sign in",
+                   message="Claude Code has no sign-in saved on this Mac, and UseMeUp reads "
+                           "your limits through it. Sign in once to start.")
+    return out
+
+
+def signin_alert(view: Optional[Dict[str, Any]],
+                 now: Optional[float] = None) -> Optional[Dict[str, str]]:
+    """The one notification the sign-in currently deserves, or None.
+
+    Same contract as alert_for: the id is stable, the app shows each id once.
+    The id carries the day the sign-in ends, so each sign-in warns once and
+    lapses once, and a new sign-in (a new end date) can warn again. The key
+    part, "signin", is no window's, so no window's on/off setting hides it.
+    """
+    if not view or not view.get("message"):
+        return None
+    ends = view.get("ends_at")
+    if ends:
+        day = ends[:10]
+    else:
+        n = now if now is not None else _dt.datetime.now(_dt.timezone.utc).timestamp()
+        day = _dt.datetime.fromtimestamp(n).strftime("%Y-%m-%d")
+    state = view.get("state")
+    if state == "expiring":
+        return {"id": "signin|%s|expiring" % day, "kind": "signin",
+                "title": "Claude Code's sign-in ends %s" % _in_words(view.get("seconds_left")),
+                "body": "It ends %s, and UseMeUp reads your limits through it. Open UseMeUp "
+                        "and click Sign in again to start a fresh one." % view.get("ends_label")}
+    if state in ("signed_out", "missing"):
+        return {"id": "signin|%s|%s" % (day, state), "kind": "signin",
+                "title": "Claude Code is signed out",
+                "body": "UseMeUp's figures have stopped updating. Open UseMeUp and click Sign "
+                        "in to bring them back."}
+    return None
+
+
 def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
             priors: Optional[Dict[str, Any]] = None,
             series: bool = False) -> Dict[str, Any]:
@@ -769,10 +896,19 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
     drop-down that draws the burn-up charts itself.
     """
     full = build(usage, limits, keys=MENUBAR_KEYS, priors=priors)
+    signin = signin_view(limits)
+    s_alert = signin_alert(signin)
+    # Present with or without figures: a signed-out Mac that has never had a
+    # good reading since the server started still needs the Sign in button.
+    stale_since = (limits or {}).get("stale_since") if (limits or {}).get("stale") else None
+    about = {"signin": signin, "live": is_live(limits), "stale_since": stale_since,
+             "stale_label": _fmt_when(_parse(stale_since))}
     if not full.get("ok"):
-        return {"ok": False, "error": full.get("error"), "windows": [], "worst": None,
-                "alerts": []}
-    wins, alerts = [], []
+        out = {"ok": False, "error": full.get("error"), "windows": [], "worst": None,
+               "alerts": [s_alert] if s_alert else []}
+        out.update(about)
+        return out
+    wins, alerts = [], ([s_alert] if s_alert else [])
     for w in full.get("windows") or []:
         c = {k: w[k] for k in MENUBAR_FIELDS if k in w}
         if series:
@@ -783,7 +919,7 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
         if a:
             alerts.append(a)
     worst = max(wins, key=_severity) if wins else None
-    return {
+    out = {
         "ok": True,
         "checked_at": full.get("checked_at"),
         "hours_per_day": full.get("hours_per_day"),
@@ -793,3 +929,5 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
         "windows": wins,
         "alerts": alerts,
     }
+    out.update(about)
+    return out

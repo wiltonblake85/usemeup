@@ -827,17 +827,21 @@ function renderMeters(d) {
     .map(([k, v]) => `<code>${esc(k)}</code> ${esc(JSON.stringify(v))}`).join("<br>");
 
   // Specific failures get specific instructions. "Unavailable" helps nobody.
+  const SIGN_IN = "Click <strong>Sign in</strong> in the UseMeUp menu bar drop-down, or run "
+    + "<code>claude auth login</code> in a terminal. A browser tab opens; click Authorize. "
+    + "A Claude Code session in the Claude app or in the cloud does not count: it uses the "
+    + "app's own sign-in, not the one saved on this Mac.";
   const FIXES = {
-    token_expired: "Run a real Claude Code prompt in a terminal — <code>claude -p ok</code> is "
-      + "enough — then reload this page. Verified: only an actual API call refreshes the stored "
-      + "token. <code>claude auth status</code> reads local state and does NOT refresh it. "
-      + "This tool is read-only on your credential and deliberately will not refresh it for you.",
-    auth_failed: "Run a real Claude Code prompt (<code>claude -p ok</code>) to refresh the stored "
-      + "token, then reload. <code>claude auth status</code> will not do it.",
+    signed_out: "Claude Code's sign-in on this Mac has ended, and only a new one brings the "
+      + "readings back. " + SIGN_IN,
+    token_expired: "Any real Claude Code call renews it: <code>claude -p ok</code> in a terminal "
+      + "is enough. <code>claude auth status</code> reads local state and does NOT renew it. "
+      + "Turn on automatic renewal (USEMEUP_AUTO_REFRESH=1) to have UseMeUp ask Claude Code for you.",
+    auth_failed: "Any real Claude Code call renews the stored token (<code>claude -p ok</code>). "
+      + "<code>claude auth status</code> will not do it.",
     rate_limited: "The usage endpoint is throttling this client. It backs off automatically "
       + "and will retry on its own; nothing for you to do.",
-    no_credential: "No Claude Code credential was found in the Keychain. Sign in to Claude Code "
-      + "once and it will be created.",
+    no_credential: "Claude Code has no sign-in saved on this Mac. " + SIGN_IN,
   };
 
   if (d && d.ok && !d.windows.length) {
@@ -854,8 +858,8 @@ function renderMeters(d) {
     const tk = d && d.token || {};
     el.innerHTML = `<div class="note"><strong>Live rate limits unavailable.</strong><br>${esc(why)}
       ${fix ? "<br><br><strong>Fix:</strong> " + fix : ""}
-      ${tk.refresh_expires_at ? `<br><br>Refresh token still valid until
-        ${esc(new Date(tk.refresh_expires_at).toLocaleString())}, so a normal re-auth is all it takes.` : ""}
+      ${tk.refresh_expires_at && !tk.refresh_expired ? `<br><br>The sign-in itself runs until
+        ${esc(new Date(tk.refresh_expires_at).toLocaleString())}, so renewing the token is all it takes.` : ""}
       ${tried ? "<br><br>What it tried:<br>" + tried : ""}
       <br><br>Everything below is read from local files and is unaffected.</div>`;
     return;
@@ -867,6 +871,12 @@ function renderMeters(d) {
       ${esc(d.stale_reason || "The latest refresh failed.")}
       ${FIXES[d.stale_kind] ? "<br><br><strong>Fix:</strong> " + FIXES[d.stale_kind] : ""}
       <br><br>Percentages below are from that earlier check and are no longer live. Countdowns are current.</div>` : "";
+  // Days before the sign-in ends, say so while there is still time to act.
+  const si = d.signin || {};
+  const signinBanner = !d.stale && si.state === "expiring" && si.ends_at
+    ? `<div class="note" style="border-left-color:var(--warning);margin-bottom:18px">
+      <strong>Claude Code's sign-in on this Mac ends ${esc(new Date(si.ends_at).toLocaleString())}.</strong>
+      UseMeUp reads your limits through it, so sign in again before then. ${SIGN_IN}</div>` : "";
 
   const W = widthOf("#meters");
   // Windows turned off in the menu bar app (a retired model's, say) are not
@@ -880,7 +890,7 @@ function renderMeters(d) {
     el.innerHTML = `<div class="note">Every window is turned off in the UseMeUp menu bar app's Settings.</div>`;
     return;
   }
-  el.innerHTML = staleBanner + ordered.map(w => {
+  el.innerHTML = staleBanner + signinBanner + ordered.map(w => {
     const p = w.used_pct, st = sevOf(p);
     // Measured bars are capped at "serious" so they never match the overspend
     // block drawn on top of them; the legend has to agree with the bars.

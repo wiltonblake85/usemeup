@@ -80,7 +80,8 @@ final class StatusItemController: NSObject {
             ?? .fallback
         b.image = BarLabel.image(store.barSegments, style: style,
                                  dark: MenuBarAppearance.shared.dark,
-                                 allClear: store.barAllClear)
+                                 allClear: store.barAllClear,
+                                 faded: !store.isLive && store.payload != nil)
         b.setAccessibilityLabel(store.barSpoken)
         b.toolTip = store.barSpoken
     }

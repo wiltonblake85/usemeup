@@ -84,6 +84,9 @@ TTL_PRIORS = 900
 TTL_LIMITS = 300
 TTL_LIMITS_ERROR = 60
 BACKOFF_429 = [300, 600, 1200, 1800]
+# Failures found without calling the API at all (only the Keychain is read), so
+# asking again every minute costs nothing and a fresh sign-in shows at once.
+LOCAL_FAILURES = ("signed_out", "no_credential", "token_expired")
 _last_good = [None]
 _429_streak = [0]
 _last_ingest = [0.0]
@@ -192,12 +195,19 @@ def _limits():
 def _limits_unlocked():
     cur, age = _cache["limits"], time.time() - _cache["limits_at"]
     if cur:
-        if cur.get("ok"):
+        # A stale reading is the last good one standing in for a failure, so
+        # it is timed by the failure behind it (stale_kind), not as a success.
+        # Before 2026-09-29 it was timed as a success, and a sign-in completed
+        # while stale took up to five minutes to show.
+        kind = cur.get("reason") or cur.get("stale_kind")
+        if cur.get("ok") and not cur.get("stale"):
             ttl = TTL_LIMITS
-        elif cur.get("reason") == "rate_limited":
+        elif kind == "rate_limited":
             ttl = BACKOFF_429[min(_429_streak[0], len(BACKOFF_429) - 1)]
-        else:
+        elif kind in LOCAL_FAILURES or not cur.get("ok"):
             ttl = TTL_LIMITS_ERROR
+        else:
+            ttl = TTL_LIMITS     # a failed network call: do not retry it any sooner
         if age < ttl:
             return cur
 
@@ -221,7 +231,10 @@ def _limits_unlocked():
     if not d.get("ok") and _last_good[0]:
         prev = dict(_last_good[0])
         prev.update({"ok": True, "stale": True, "stale_reason": d.get("error"),
-                     "stale_kind": d.get("reason"), "stale_since": prev.get("checked_at")})
+                     "stale_kind": d.get("reason"), "stale_since": prev.get("checked_at"),
+                     # The sign-in as it is NOW, not as it was at the last good
+                     # reading: that is the whole point of showing it.
+                     "signin": d.get("signin"), "token": d.get("token") or prev.get("token")})
         for w in prev.get("windows", []):
             if w.get("resets_at"):
                 w["resets_in_seconds"] = rate_limits._secs_until(w["resets_at"])

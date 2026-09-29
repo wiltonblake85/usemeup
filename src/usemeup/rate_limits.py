@@ -37,22 +37,56 @@ def _safe(v):
     return v
 
 
-def _ms_to_iso(v):
+def _as_ms(v):
+    """A stored timestamp as epoch milliseconds, whichever unit it was saved in."""
     try:
         n = float(v)
     except (TypeError, ValueError):
         return None
-    if n > 1e11:
-        n /= 1000.0
-    return datetime.datetime.fromtimestamp(n, datetime.timezone.utc).isoformat()
+    return n if n > 1e11 else n * 1000.0
+
+
+def _ms_to_iso(v):
+    n = _as_ms(v)
+    if n is None:
+        return None
+    # Whole seconds: the Mac app parses these with ISO8601DateFormatter, which
+    # does not reliably take six fractional digits.
+    return datetime.datetime.fromtimestamp(int(n / 1000.0), datetime.timezone.utc).isoformat()
+
+
+def _local_time(iso):
+    """An ISO time as this Mac's clock reads it: "Tue Sep 29 at 12:28 AM"."""
+    if not iso:
+        return None
+    try:
+        t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
+    return "%s at %s" % (t.strftime("%a %b ") + str(t.day),
+                         t.strftime("%I:%M %p").lstrip("0"))
 
 
 def _token():
     """Return (token, source, meta). The token stays in memory only.
 
-    meta carries expiry facts (never the token): expires_at, expired,
-    refresh_expires_at. We read expiresAt so we can fail with a useful message
-    instead of firing doomed requests at the API.
+    meta carries facts about the sign-in, never a token:
+
+      expires_at          when the access token stops working
+      expired             it already has
+      refresh_expires_at  when the sign-in itself ends: past this, Claude Code
+                          cannot renew anything and only a new sign-in helps
+      refresh_expired     it already has
+      has_access          an access token is present at all
+      can_renew           a refresh token is present and has not ended, so
+                          Claude Code can still renew the access token
+      missing             no Claude Code sign-in is saved on this Mac at all
+
+    Claude Code empties both tokens when a renewal is refused (seen 2026-09-29
+    at 4:59 AM, two hours after the sign-in ended), but leaves the entry and
+    its refreshTokenExpiresAt in place. That state is "signed out", and before
+    this it was reported as "no credential found", which sent people looking
+    for a Keychain problem that did not exist.
     """
     blob, source = None, None
     for svc in KEYCHAIN_SERVICES:
@@ -78,22 +112,92 @@ def _token():
         except Exception:
             blob = None
     if blob is None:
-        return None, None, {"error": "no Claude Code credential found (tried Keychain %s and %s)"
-                            % (", ".join(KEYCHAIN_SERVICES), CRED_FILE)}
+        return None, None, {"missing": True, "can_renew": False,
+                            "error": "No Claude Code sign-in is saved on this Mac (looked in "
+                                     "the Keychain under %s, and in %s)."
+                                     % (", ".join(KEYCHAIN_SERVICES), CRED_FILE)}
 
+    return _meta_from(blob, source)
+
+
+def _meta_from(blob, source, now_ms=None):
+    """(token, source, meta) from a parsed credential. Split out so the rules
+    about what counts as signed out can be tested without a Keychain."""
     oauth = blob.get("claudeAiOauth") or blob
     tok = oauth.get("accessToken")
-    exp = oauth.get("expiresAt")
-    now_ms = datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000
+    exp = _as_ms(oauth.get("expiresAt"))
+    rexp = _as_ms(oauth.get("refreshTokenExpiresAt"))
+    if now_ms is None:
+        now_ms = datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000
+    refresh_expired = rexp is not None and rexp < now_ms
     meta = {
         "expires_at": _ms_to_iso(exp),
-        "expired": bool(exp) and float(exp) < now_ms,
-        "refresh_expires_at": _ms_to_iso(oauth.get("refreshTokenExpiresAt")),
+        "expired": exp is not None and exp < now_ms,
+        "refresh_expires_at": _ms_to_iso(rexp),
+        "refresh_expired": refresh_expired,
+        "has_access": bool(tok),
+        "can_renew": bool(oauth.get("refreshToken")) and not refresh_expired,
     }
     if not tok:
-        meta["error"] = "credential found at %s but it carries no access token" % source
+        meta["error"] = ("Claude Code is signed out on this Mac, so UseMeUp cannot read your "
+                         "limits." if not meta["can_renew"] else
+                         "Claude Code's saved sign-in has no access token right now. Claude "
+                         "Code renews it on its next call.")
         return None, source, meta
     return tok, source, meta
+
+
+def signed_out(meta):
+    """True when nothing but a new sign-in can bring the readings back: the
+    access token is gone or expired, and the sign-in can no longer renew it."""
+    if not meta or meta.get("missing") or "has_access" not in meta:
+        return False                    # nothing was read, so nothing is known
+    stuck = not meta.get("has_access") or meta.get("expired")
+    return bool(stuck) and not meta.get("can_renew")
+
+
+# How far ahead of the end of a sign-in the app starts saying so.
+SIGNIN_WARN_SECONDS = 3 * 86400
+
+
+def signin_summary(meta, now=None):
+    """Where Claude Code's sign-in on this Mac stands. Never contains a token.
+
+    state       ok          signed in, ending more than SIGNIN_WARN_SECONDS away
+                expiring    signed in, ending within SIGNIN_WARN_SECONDS
+                signed_out  saved, but only a new sign-in brings readings back
+                missing     no Claude Code sign-in saved on this Mac at all
+                unknown     signed in, but the credential states no end date
+    ends_at     when the sign-in ends (ISO 8601, whole seconds, UTC). While it
+                can renew, that is the sign-in's own end; once it cannot, it is
+                the last access token's, because readings carry on until then.
+    seconds_left  until ends_at, floored at zero
+    """
+    if not meta or ("has_access" not in meta and not meta.get("missing")):
+        return None                     # no credential was read (status line source)
+    if meta.get("missing"):
+        return {"state": "missing", "ends_at": None, "seconds_left": None}
+    ends = meta.get("refresh_expires_at") if meta.get("can_renew") else (
+        meta.get("expires_at") if meta.get("has_access") else None)
+    if not ends and not meta.get("can_renew"):
+        ends = meta.get("refresh_expires_at")      # when it ran out, for the record
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    left = None
+    if ends:
+        try:
+            t = datetime.datetime.fromisoformat(ends)
+            left = max(0, int((t - now).total_seconds()))
+        except ValueError:
+            left = None
+    if signed_out(meta):
+        state = "signed_out"
+    elif left is None:
+        state = "unknown"
+    elif left <= SIGNIN_WARN_SECONDS:
+        state = "expiring"
+    else:
+        state = "ok"
+    return {"state": state, "ends_at": ends, "seconds_left": left}
 
 
 # --- Keeping the token fresh without ever touching the refresh token -------------
@@ -102,18 +206,38 @@ def _token():
 # use, and mishandling that would break the CLI login), we ask the CLI to make one
 # cheap call and then re-read the Keychain. This module stays read-only on the
 # credential; Claude Code remains the only thing that ever writes it.
+#
+# It runs only while renewal is still possible (meta["can_renew"]). Once the
+# sign-in itself has ended, `claude -p ok` cannot help: on 2026-09-29 it ran
+# every ten minutes from 4:59 AM until 3:31 PM, 56 times, each one failing with
+# "OAuth session expired and could not be refreshed" and each leaving a
+# transcript behind. And when a renewal does fail while it should have worked
+# (the network was down, say), the next try waits twice as long as the last,
+# up to REFRESH_BACKOFF_CAP, instead of repeating every ten minutes forever.
 REFRESH_CMD = ["claude", "-p", "ok", "--model", "claude-haiku-4-5"]
 REFRESH_CWD = config.REFRESH_CWD
 REFRESH_COOLDOWN = 600      # never more than once every 10 minutes
-_last_refresh = [0.0]
+REFRESH_BACKOFF_CAP = 4 * 3600
+_refresh_state = {"last": 0.0, "fails": 0}
+
+
+def refresh_wait():
+    """Seconds that must pass after the last attempt before the next one."""
+    return min(REFRESH_COOLDOWN * (2 ** _refresh_state["fails"]), REFRESH_BACKOFF_CAP)
+
+
+def note_refresh(worked):
+    """Record whether an attempt left a usable token, which sets the next wait."""
+    _refresh_state["fails"] = 0 if worked else min(_refresh_state["fails"] + 1, 16)
 
 
 def refresh_via_claude_code():
     """Trigger Claude Code's own OAuth refresh. Returns a status dict, never a token."""
-    if time.time() - _last_refresh[0] < REFRESH_COOLDOWN:
-        return {"ran": False, "reason": "cooling down; last attempt was under %ds ago"
-                % REFRESH_COOLDOWN}
-    _last_refresh[0] = time.time()
+    wait = refresh_wait()
+    if time.time() - _refresh_state["last"] < wait:
+        return {"ran": False, "reason": "waiting; the last attempt was under %d minutes ago"
+                % (wait // 60)}
+    _refresh_state["last"] = time.time()
     try:
         os.makedirs(REFRESH_CWD, exist_ok=True)
         with open(os.devnull) as devnull:
@@ -281,30 +405,38 @@ def _probe_endpoint(allow_ping=False, auto_refresh=None):
         auto_refresh = config.AUTO_REFRESH
     token, source, meta = _token()
     refresh = None
-    if auto_refresh and (not token or meta.get("expired")):
+    if auto_refresh and (not token or meta.get("expired")) and meta.get("can_renew"):
         refresh = refresh_via_claude_code()
         if refresh.get("ran"):
             token, source, meta = _token()
+            note_refresh(bool(token) and not meta.get("expired"))
 
     base = {"ok": False, "source": source, "windows": [], "raw": {},
             "token": {k: v for k, v in meta.items() if k != "error"},
+            "signin": signin_summary(meta),
             "refresh": refresh}
+
+    if signed_out(meta):
+        base["reason"] = "signed_out"
+        ended = _local_time(meta.get("refresh_expires_at"))
+        base["error"] = ("Claude Code is signed out on this Mac, so UseMeUp cannot read your "
+                         "limits." + (" Its sign-in ended %s." % ended if ended else ""))
+        del token
+        return base
 
     if not token:
         base["error"] = meta.get("error", "no usable credential")
-        base["reason"] = "no_credential"
+        base["reason"] = "no_credential" if meta.get("missing") or not source else "token_expired"
         return base
 
     if meta.get("expired"):
         base["reason"] = "token_expired"
-        why = (("Tried to refresh via Claude Code and it did not take: %s"
+        why = (("Tried to renew it through Claude Code and it did not take: %s"
                 % (refresh.get("detail") or refresh.get("reason")))
                if refresh else
-               "Automatic refresh is off (set USEMEUP_AUTO_REFRESH=1 to enable it).")
-        base["error"] = ("The stored Claude Code access token expired at %s. %s Run "
-                         "`claude -p ok` in a terminal, then reload. Note that "
-                         "`claude auth status` does NOT refresh it."
-                         % (meta.get("expires_at") or "an unknown time", why))
+               "Automatic renewal is off (set USEMEUP_AUTO_REFRESH=1 to turn it on).")
+        base["error"] = ("The stored Claude Code access token expired %s. %s"
+                         % (_local_time(meta.get("expires_at")) or "at an unknown time", why))
         del token
         return base
 
@@ -323,11 +455,15 @@ def _probe_endpoint(allow_ping=False, auto_refresh=None):
         result = {"windows": windows, "strategy": "usage endpoint",
                   "raw": {k: v for k, v in body.items() if k in ("limits", "five_hour", "seven_day")}}
 
-    if result is None and status == 401 and auto_refresh and refresh is None:
+    if (result is None and status == 401 and auto_refresh and refresh is None
+            and meta.get("can_renew", True)):
         refresh = refresh_via_claude_code()
         if refresh.get("ran"):
             tok2, source2, meta2 = _token()
-            if tok2 and not meta2.get("expired"):
+            base["signin"] = signin_summary(meta2)
+            if not (tok2 and not meta2.get("expired")):
+                note_refresh(False)
+            else:
                 del token
                 token, source = tok2, source2
                 base["token"] = {k: v for k, v in meta2.items() if k != "error"}
@@ -340,6 +476,7 @@ def _probe_endpoint(allow_ping=False, auto_refresh=None):
                 attempts.append({"strategy": "usage endpoint (after refresh)", "status": status,
                                  "windows_found": len(windows),
                                  "detail": "" if windows else _safe(text[:200])})
+                note_refresh(bool(windows))
                 if windows:
                     result = {"windows": windows, "strategy": "usage endpoint (after refresh)",
                               "raw": {k: v for k, v in body.items()
@@ -370,14 +507,14 @@ def _probe_endpoint(allow_ping=False, auto_refresh=None):
         base.update({
             "attempts": attempts,
             "reason": "auth_failed" if auth_fail else "no_data",
-            "error": ("The API rejected the stored token (HTTP 401). Run any Claude Code command "
-                      "to refresh it, then reload." if auth_fail else
+            "error": ("The API rejected the stored token (HTTP 401). Claude Code renews it on "
+                      "its next call." if auth_fail else
                       "Credential loaded from %s, but no endpoint returned usable limit data."
                       % source)})
         return base
 
     result.update({"ok": True, "source": source, "attempts": attempts,
-                   "token": base["token"], "refresh": refresh,
+                   "token": base["token"], "signin": base["signin"], "refresh": refresh,
                    "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
     return result
 

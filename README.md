@@ -53,7 +53,9 @@ The app starts its own copy of the server, so there's nothing else to run. Befor
 
 After that, every Claude Code turn refreshes the reading. No credential and no network call, but it only moves when you use Claude Code in a terminal.
 
-**The usage endpoint** is the other. In the app's Settings, set Rate limits from to Usage endpoint. It asks Anthropic directly, using the sign-in Claude Code keeps in your Keychain, so it sees what Cowork and claude.ai spend as it happens, and it's the only source with the per-model weekly window. macOS asks whether UseMeUp may read that Keychain item; allow it. If you rarely open Claude Code, also turn on the renew option under it, because that sign-in expires after 8 to 12 hours and only a Claude Code call renews it.
+**The usage endpoint** is the other. In the app's Settings, set Rate limits from to Usage endpoint. It asks Anthropic directly, using the sign-in Claude Code keeps in your Keychain, so it sees what Cowork and claude.ai spend as it happens, and it's the only source with the per-model weekly window. macOS asks whether UseMeUp may read that Keychain item; allow it. If you rarely open Claude Code, also turn on the renew option under it, because the access token expires after 8 to 12 hours and only a Claude Code call renews it.
+
+The sign-in behind that token lasts about a month, and no Claude Code call can extend it; only a new sign-in does. Three days before it ends, UseMeUp says so in its drop-down and sends one notification. Click **Sign in again**, then Authorize in the browser tab that opens. If it does end, the menu bar fades the last figures and the drop-down offers **Sign in**. A Claude Code session in the Claude app or in the cloud does not renew it: those use the app's own sign-in, not the one saved on your Mac.
 
 ## Why another usage meter
 
@@ -411,14 +413,18 @@ The Claude Code
 access token lives 8 to 12 hours and only Claude Code refreshes it, on a real API
 call. If you haven't used the CLI lately the token is stale and the endpoint
 can't be read. With `USEMEUP_AUTO_REFRESH=1` the server runs `claude -p ok`
-itself, at most once every ten minutes, so that Claude Code renews its own
-credential. That costs a handful of Haiku tokens about once a day. A tool that
+itself so that Claude Code renews its own credential: at most once every ten
+minutes, twice as long after each failed try (up to four hours), and never
+once the sign-in itself has ended, since no call can renew that. That costs a
+handful of Haiku tokens about once a day. A tool that
 makes billable calls on your account shouldn't be something you find out about
 later, so the plain `usemeup` command leaves it off. The agent turns it on,
 because an unattended meter that goes stale twice a day defeats the point; pass
 `--no-auto-refresh` to keep it read-only. Without it, the page tells you the
 token expired and that `claude -p ok` fixes it. (`claude auth status` doesn't
-refresh it. It only reads local state.)
+refresh it. It only reads local state.) When the sign-in has ended, the page
+says Claude Code is signed out and points to the app's Sign in button, or
+`claude auth login` in a terminal.
 
 ## Configuration
 

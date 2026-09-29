@@ -86,7 +86,7 @@ struct SettingsView: View {
             .onChange(of: serverSettings.source) { _, _ in
                 Task { await store.applyServerSettings() }
             }
-            Toggle("Renew an expired sign-in by running claude -p ok", isOn: $serverSettings.autoRefresh)
+            Toggle("Renew the access token by running claude -p ok when it expires", isOn: $serverSettings.autoRefresh)
                 .disabled(store.link == .attached || serverSettings.source == .statusline)
                 .onChange(of: serverSettings.autoRefresh) { _, _ in
                     Task { await store.applyServerSettings() }
@@ -94,6 +94,19 @@ struct SettingsView: View {
             Text(serverNote)
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            // Only a server reading the usage endpoint reads a sign-in, so
+            // only then is there one to show.
+            if let s = store.payload?.signin {
+                LabeledContent("Claude Code sign-in") {
+                    Text(signInText(s))
+                        .foregroundStyle(s.severity == .calm ? Color.secondary : s.severity.color)
+                }
+                SignInNotice(info: s, showMessage: false)
+                Text("The access token renews itself every few hours. The sign-in behind it lasts about a month, and only a new sign-in extends it. UseMeUp warns you three days before it ends. A Claude Code session in the Claude app or the cloud does not count: it uses the app's own sign-in, not this Mac's.")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .formStyle(.grouped)
         .frame(minWidth: 400)
@@ -104,6 +117,15 @@ struct SettingsView: View {
     private var settingsWindows: [UsageWindow] {
         let rank = ["weekly_all": 0, "weekly_scoped": 1, "session": 2]
         return store.allWindows.sorted { (rank[$0.key] ?? 9) < (rank[$1.key] ?? 9) }
+    }
+
+    private func signInText(_ s: SignInInfo) -> String {
+        switch s.state {
+        case "signed_out": return "signed out"
+        case "missing":    return "none saved on this Mac"
+        case "unknown":    return "signed in"
+        default:           return s.endsLabel.map { "ends \($0)" } ?? "signed in"
+        }
     }
 
     private var pidText: String {
@@ -128,7 +150,7 @@ struct SettingsView: View {
             return "UseMeUp joined a server that was already running, so that server's own settings apply. These choices take effect when UseMeUp starts its own server."
         }
         let name = RateSource(rawValue: raw)?.title.lowercased() ?? raw
-        let renew = (info.autoRefresh ?? false) ? ", renewing an expired sign-in" : ""
+        let renew = (info.autoRefresh ?? false) ? ", renewing the access token when it expires" : ""
         return "UseMeUp joined a server that was already running, so its own settings apply: \(name)\(renew). These choices take effect when UseMeUp starts its own server."
     }
 
