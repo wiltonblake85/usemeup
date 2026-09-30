@@ -8,11 +8,18 @@ import SwiftUI
 /// already computes (the same ones Transom's notch reads), so the app and the
 /// notch cannot disagree about where a window lands.
 ///
-///   filled line   what has been used, from the five-minute samples
-///   dashed        where the current pace lands by reset (red if over 100%)
+///   filled line   what has been used, from the five-minute samples, in the
+///                 window's colour, with a dot where it stands now
+///   grey dashed   where the current pace lands by reset (red if over 100%)
 ///   dotted grey   the reference pace: your working hours, or the clock
 ///   red rule      the cap
 ///   grey rule     now
+///
+/// Colour belongs to what happened. The forecast is a guess, so it stays grey
+/// until it crosses the cap. Before 2026-09-29 it was drawn in the used
+/// line's green, and on the first evening of a week, with 1% used and a
+/// forecast built wholly from past weeks, a green dash ran the full width of
+/// the chart and read as last week's usage that had failed to reset.
 struct BurnChart: View {
     let window: UsageWindow
 
@@ -35,7 +42,11 @@ struct BurnChart: View {
     /// Where the forecast lands at reset.
     private var landing: Double? { projection.last?.v }
     private var over: Bool { (landing ?? 0) > 100 }
+    /// The used line: the window's own colour.
     private var tint: Color { window.severity == .calm ? .green : window.severity.color }
+    /// The forecast: grey, darker and longer-dashed than the pace line so the
+    /// two stay apart where they run close, and red once it crosses the cap.
+    private var forecastInk: Color { over ? .red : BurnStyle.forecastGrey }
 
     /// Headroom above 100 so an over-cap forecast is drawn, not clipped.
     private var yTop: Double {
@@ -59,9 +70,26 @@ struct BurnChart: View {
             ForEach(reference) { p in
                 LineMark(x: .value("Time", p.t), y: .value("Used", p.v),
                          series: .value("Line", "pace"))
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                    .foregroundStyle(BurnStyle.paceGrey)
+                    .lineStyle(BurnStyle.pace)
             }
+            ForEach(projection) { p in
+                LineMark(x: .value("Time", p.t), y: .value("Used", p.v),
+                         series: .value("Line", "forecast"))
+                    .foregroundStyle(forecastInk)
+                    .lineStyle(BurnStyle.forecast)
+            }
+            if let last = projection.last {
+                PointMark(x: .value("Time", last.t), y: .value("Used", last.v))
+                    .foregroundStyle(forecastInk)
+                    .symbolSize(24)
+                    .annotation(position: .leading, alignment: .center, spacing: 4) {
+                        Text(pct(last.v))
+                            .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(over ? Color.red : Color.secondary)
+                    }
+            }
+            // Used goes on top of the guesses, so it is never hidden under them.
             ForEach(observed) { p in
                 AreaMark(x: .value("Time", p.t), y: .value("Used", p.v))
                     .foregroundStyle(tint.opacity(0.14))
@@ -70,23 +98,14 @@ struct BurnChart: View {
                 LineMark(x: .value("Time", p.t), y: .value("Used", p.v),
                          series: .value("Line", "used"))
                     .foregroundStyle(tint)
-                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .lineStyle(BurnStyle.used)
             }
-            ForEach(projection) { p in
-                LineMark(x: .value("Time", p.t), y: .value("Used", p.v),
-                         series: .value("Line", "forecast"))
-                    .foregroundStyle(over ? Color.red : tint)
-                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
-            }
-            if let last = projection.last {
-                PointMark(x: .value("Time", last.t), y: .value("Used", last.v))
-                    .foregroundStyle(over ? Color.red : tint)
-                    .symbolSize(28)
-                    .annotation(position: .leading, alignment: .center, spacing: 4) {
-                        Text(pct(last.v))
-                            .font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                            .foregroundStyle(over ? Color.red : Color.primary)
-                    }
+            // Where you stand now. In the first hours of a window the used
+            // line is a few points wide; the dot keeps it findable.
+            if let here = observed.last {
+                PointMark(x: .value("Time", here.t), y: .value("Used", here.v))
+                    .foregroundStyle(tint)
+                    .symbolSize(36)
             }
             RuleMark(y: .value("Cap", 100))
                 .foregroundStyle(Color.red.opacity(0.7))
@@ -133,22 +152,36 @@ struct BurnChart: View {
     }
 }
 
+/// One definition of each line, shared by the chart and its legend so the two
+/// cannot drift apart.
+enum BurnStyle {
+    static let used = StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+    static let forecast = StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+    static let pace = StrokeStyle(lineWidth: 1, dash: [2, 3])
+
+    static let forecastGrey = Color.primary.opacity(0.5)
+    static let paceGrey = Color.secondary.opacity(0.7)
+}
+
 /// What the lines mean, once under all the charts rather than under each.
+/// The used swatch stays neutral: the used line takes the window's colour,
+/// which may be green, amber or red, and one swatch cannot be all three.
 struct BurnLegend: View {
     var body: some View {
         HStack(spacing: 14) {
-            key(Rectangle().frame(width: 14, height: 2), "used")
-            key(dashed([4, 3]), "forecast")
-            key(dashed([2, 2]).opacity(0.7), "your pace")
-            key(dashed([2, 2]).foregroundStyle(Color.red.opacity(0.7)), "cap")
+            key(line(BurnStyle.used), "used")
+            key(line(BurnStyle.forecast).foregroundStyle(BurnStyle.forecastGrey), "forecast")
+            key(line(BurnStyle.pace).foregroundStyle(BurnStyle.paceGrey), "your pace")
+            key(line(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                    .foregroundStyle(Color.red.opacity(0.7)), "cap")
         }
         .font(.system(size: 10))
         .foregroundStyle(.secondary)
     }
 
-    private func dashed(_ pattern: [CGFloat]) -> some View {
+    private func line(_ style: StrokeStyle) -> some View {
         Path { p in p.move(to: .init(x: 0, y: 1)); p.addLine(to: .init(x: 14, y: 1)) }
-            .stroke(style: StrokeStyle(lineWidth: 2, dash: pattern))
+            .stroke(style: style)
             .frame(width: 14, height: 2)
     }
 

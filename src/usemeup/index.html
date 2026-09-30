@@ -706,7 +706,7 @@ const adviceOf = w => (STATE.advice || {})[w.key] || "";
 
 // A burn-up chart: consumption against the clock, over one window.
 //   solid   what you have actually used, from samples
-//   dashed  where the current rate lands you by reset
+//   dashed  where the current rate lands you by reset, grey (red over the cap)
 //   grey    the reference pace, 0% at open to 100% at reset
 // Above the reference means you are outrunning the window. On the 24h basis the
 // reference is a straight diagonal; on the working-day basis it is a staircase
@@ -780,13 +780,17 @@ function burnChart(w, W) {
   } else {
     projPath = `M${x(nowT).toFixed(1)},${y(p.used_pct).toFixed(1)} L${x(t1).toFixed(1)},${y(projEnd).toFixed(1)}`;
   }
-  g += `<path d="${projPath}" fill="none" stroke="${overCap ? danger : fill}" stroke-width="2"
-        stroke-dasharray="5 4" opacity=".85" stroke-linejoin="round"/>
-        <circle cx="${x(nowT).toFixed(1)}" cy="${y(w.used_pct).toFixed(1)}" r="3.5" fill="${fill}"/>
+  // Colour belongs to what happened. The projection is a guess, so it is grey
+  // until it crosses the cap; in the used line's colour it read, on the first
+  // evening of a week, as last week's usage that had failed to reset.
+  const guess = overCap ? danger : ink;
+  g += `<path d="${projPath}" fill="none" stroke="${guess}" stroke-width="1.5"
+        stroke-dasharray="5 4" opacity="${overCap ? ".85" : ".5"}" stroke-linejoin="round"/>
         <circle cx="${x(t1).toFixed(1)}" cy="${y(projEnd).toFixed(1)}" r="3"
-                fill="none" stroke="${overCap ? danger : fill}" stroke-width="1.5"/>
+                fill="none" stroke="${guess}" stroke-width="1.5" opacity="${overCap ? "1" : ".5"}"/>
+        <circle cx="${x(nowT).toFixed(1)}" cy="${y(w.used_pct).toFixed(1)}" r="3.5" fill="${fill}"/>
         <text x="${W - PR + 8}" y="${y(projEnd) + 3.5}" font-size="10.5"
-              fill="${overCap ? danger : ink}" font-weight="600">${projEnd.toFixed(projEnd >= 10 ? 0 : 1)}%</text>`;
+              fill="${overCap ? danger : muted}" font-weight="600">${projEnd.toFixed(projEnd >= 10 ? 0 : 1)}%</text>`;
 
   // Where the projection crosses the cap.
   const hitAt = b.on ? b.exhausted : (p.exhausted_at ? new Date(p.exhausted_at).getTime() : null);
