@@ -355,3 +355,38 @@ def test_any_use_ends_idle():
 def test_no_history_is_not_idle():
     assert panel.idle_window(0.0, 0.5, None) is False
     assert panel.idle_window(0.0, 0.5, {"expected_end": None}) is False
+
+
+# ---------------------------------------------------------------- chart axis
+
+def test_a_landing_that_fits_keeps_a_0_to_100_axis():
+    # 2026-09-29: a week forecast at 92.3% drew a 0-125 axis, an empty band
+    # across the top and the chart squashed into the rest.
+    for landing in (0.0, 50.0, 91.0, 92.3, 94.0):
+        assert panel.axis_top(landing) == 100.0, landing
+
+
+def test_no_landing_keeps_a_0_to_100_axis():
+    assert panel.axis_top(None) == 100.0
+
+
+def test_a_landing_near_the_cap_gets_room_for_its_label():
+    assert panel.axis_top(94.1) == 125.0
+    assert panel.axis_top(100.0) == 125.0
+
+
+def test_an_over_cap_landing_is_drawn_not_clipped():
+    assert panel.axis_top(117.0) == 125.0
+    assert panel.axis_top(117.1) == 150.0
+    # An exact step is not rounded past itself.
+    assert panel.axis_top(142.0) == 150.0
+
+
+def test_the_chart_series_uses_the_axis_rule():
+    w = _window(40.0, elapsed_frac=0.5, projected_end=92.3)
+    lim = {"ok": True, "windows": [w]}
+    got = panel.menubar({}, lim, series=True)["windows"][0]
+    assert got["y_max"] == 100.0
+    over = panel.menubar({}, {"ok": True, "windows": [_window(60, 0.5, projected_end=120)]},
+                         series=True)["windows"][0]
+    assert over["y_max"] == 150.0

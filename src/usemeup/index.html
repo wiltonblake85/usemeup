@@ -724,8 +724,9 @@ function burnChart(w, W) {
   const span = Math.max(1, t1 - t0);
   const x = t => PL + iw * Math.max(0, Math.min(1, (t - t0) / span));
   const projEnd = b.on ? b.end : p.projected_end_pct;
-  // Headroom above 100 so an over-cap projection is visible rather than clipped.
-  const yMax = Math.max(100, Math.ceil((projEnd + 8) / 25) * 25);
+  // 0-100 unless the landing would be clipped: over the cap, or close enough
+  // to 100 that its label crowds the top (panel.axis_top, HEADROOM_FROM 94).
+  const yMax = projEnd > 94 ? Math.max(100, Math.ceil((projEnd + 8) / 25) * 25) : 100;
   const y = v => PT + ih - ih * Math.max(0, Math.min(yMax, v)) / yMax;
 
   const ink = cssv("--text-primary"), muted = cssv("--text-muted"), line = cssv("--line");

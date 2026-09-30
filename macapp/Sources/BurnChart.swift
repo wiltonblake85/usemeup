@@ -48,10 +48,16 @@ struct BurnChart: View {
     /// two stay apart where they run close, and red once it crosses the cap.
     private var forecastInk: Color { over ? .red : BurnStyle.forecastGrey }
 
-    /// Headroom above 100 so an over-cap forecast is drawn, not clipped.
+    /// 0-100, unless the landing would be clipped: over the cap, or close
+    /// enough to 100 that its label runs off the top. The server sends the
+    /// same answer as y_max (panel.axis_top); this agrees with it for a
+    /// server that predates the rule.
     private var yTop: Double {
-        let top = max(window.yMax ?? 100, 100, (landing ?? 0) + 8)
-        return (top / 25).rounded(.up) * 25
+        var top = max(window.yMax ?? 100, 100)
+        if let land = landing, land > BurnStyle.headroomFrom {
+            top = max(top, ((land + 8) / 25).rounded(.up) * 25)
+        }
+        return top
     }
 
     private var isShort: Bool {
@@ -161,6 +167,9 @@ enum BurnStyle {
 
     static let forecastGrey = Color.primary.opacity(0.5)
     static let paceGrey = Color.secondary.opacity(0.7)
+
+    /// panel.HEADROOM_FROM: above this landing the axis grows past 100.
+    static let headroomFrom = 94.0
 }
 
 /// What the lines mean, once under all the charts rather than under each.

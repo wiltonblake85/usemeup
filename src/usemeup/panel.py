@@ -17,6 +17,7 @@ by eye until the page is switched over to read from here too.
 from __future__ import annotations
 
 import datetime as _dt
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # The working day, in hours. The dashboard lets this be picked in the UI; the
@@ -519,8 +520,7 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
     # None means there is no basis to project from yet. The axis falls back to
     # where the window already stands while the headline says so out loud.
     pe = used if proj_end is None else proj_end
-    # Headroom above 100 so an over-cap projection is visible rather than clipped.
-    y_max = max(100.0, (int((pe + 8) / 25) + 1) * 25.0) if pe + 8 > 100 else 100.0
+    y_max = axis_top(pe)
 
     observed = [[_parse(s["t"]), float(s["pct"])] for s in series if _parse(s.get("t")) is not None]
 
@@ -671,6 +671,28 @@ MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "advice", "verdict", "
 
 # The burn-up chart, for a client that draws it (the menu bar's drop-down
 # since 2026-09-25, which replaced sending people to the web page for it).
+# Where a chart's landing figure stops fitting under a 0-100 axis. The label is
+# about 11 pt tall and centred on its point; on a plot about 125 pt high, the
+# upper half of it needs roughly 6% of the axis above the point. Below this a
+# 0-100 axis holds everything.
+HEADROOM_FROM = 94.0
+
+
+def axis_top(landing):
+    """The top of a burn-up chart's y axis, in percent: 100, or the next step
+    of 25 above the landing with 8 points to spare.
+
+    Headroom is only for a landing that would otherwise be clipped: over the
+    cap, or close enough to 100 that its label runs off the top. Until
+    2026-09-29 any landing above 92 got it, so a week forecast at 92.3% drew a
+    0-125 axis with an empty band across the top and the chart squashed into
+    the rest.
+    """
+    if landing is None or landing <= HEADROOM_FROM:
+        return 100.0
+    return max(100.0, math.ceil((landing + 8) / 25.0) * 25.0)
+
+
 SERIES_FIELDS = ("t0", "t1", "now", "y_max", "elapsed_pct",
                  "reference", "observed", "projection")
 
