@@ -79,15 +79,15 @@ struct SettingsView: View {
 
             LabeledContent("Server") { Text(linkText).foregroundStyle(.secondary) }
 
-            Picker("Rate limits from", selection: $serverSettings.source) {
+            Picker("Rate limits from", selection: sourceShown) {
                 ForEach(RateSource.allCases) { Text($0.title).tag($0) }
             }
-            .disabled(store.link == .attached || store.standingIn)
+            .disabled(serverLocked)
             .onChange(of: serverSettings.source) { _, _ in
                 Task { await store.applyServerSettings() }
             }
-            Toggle("Renew the access token by running claude -p ok when it expires", isOn: $serverSettings.autoRefresh)
-                .disabled(store.link == .attached || store.standingIn || serverSettings.source == .statusline)
+            Toggle("Renew the access token by running claude -p ok when it expires", isOn: refreshShown)
+                .disabled(serverLocked || serverSettings.source == .statusline)
                 .onChange(of: serverSettings.autoRefresh) { _, _ in
                     Task { await store.applyServerSettings() }
                 }
@@ -128,6 +128,26 @@ struct SettingsView: View {
         }
     }
 
+    /// The app's own server settings are not in force: it joined a server it
+    /// did not start, or its server stands in for the LaunchAgent.
+    private var serverLocked: Bool { store.link == .attached || store.standingIn }
+
+    /// While locked, the picker and toggle show what the running server
+    /// actually uses (from /api/ping), not this app's saved choice. Until
+    /// 0.1.6 a joined server renewing tokens showed a greyed toggle reading
+    /// off, which looked like renewal was off when it was on. A server too
+    /// old to say falls back to the app's own choice, as before.
+    private var sourceShown: Binding<RateSource> {
+        guard serverLocked, let raw = store.serverInfo?.source,
+              let s = RateSource(rawValue: raw) else { return $serverSettings.source }
+        return .constant(s)
+    }
+
+    private var refreshShown: Binding<Bool> {
+        guard serverLocked, let r = store.serverInfo?.autoRefresh else { return $serverSettings.autoRefresh }
+        return .constant(r)
+    }
+
     private var pidText: String {
         store.serverInfo?.pid.map { " (pid \($0))" } ?? ""
     }
@@ -143,21 +163,20 @@ struct SettingsView: View {
         }
     }
 
-    /// When the app joined a server it did not start, the pickers above are
-    /// greyed out, and this says which settings are actually in force.
+    /// When the app joined a server it did not start, or stands in for the
+    /// LaunchAgent, the controls above are greyed out and show that server's
+    /// settings (see sourceShown); this says whose they are.
     private var serverNote: String {
+        let known = store.serverInfo?.source != nil && store.serverInfo?.autoRefresh != nil
         if store.standingIn {
-            let name = store.serverInfo?.source.map { RateSource(rawValue: $0)?.title.lowercased() ?? $0 }
-            let renew = (store.serverInfo?.autoRefresh ?? false) ? ", renewing the access token when it expires" : ""
-            return "The usemeup LaunchAgent did not answer in time, so UseMeUp started its own server in its place, with the LaunchAgent's settings" + (name.map { ": \($0)\(renew)" } ?? "") + ". These choices take effect when UseMeUp starts its own server for itself."
+            return known
+                ? "The usemeup LaunchAgent did not answer in time, so UseMeUp started its own server in its place. It runs with the LaunchAgent's settings, shown above. Your own choices apply when UseMeUp starts a server for itself."
+                : "The usemeup LaunchAgent did not answer in time, so UseMeUp started its own server in its place, with the LaunchAgent's settings. Your own choices apply when UseMeUp starts a server for itself."
         }
         guard store.link == .attached else { return serverSettings.source.blurb }
-        guard let info = store.serverInfo, let raw = info.source else {
-            return "UseMeUp joined a server that was already running, so that server's own settings apply. These choices take effect when UseMeUp starts its own server."
-        }
-        let name = RateSource(rawValue: raw)?.title.lowercased() ?? raw
-        let renew = (info.autoRefresh ?? false) ? ", renewing the access token when it expires" : ""
-        return "UseMeUp joined a server that was already running, so its own settings apply: \(name)\(renew). These choices take effect when UseMeUp starts its own server."
+        return known
+            ? "UseMeUp joined a server that was already running, so the settings above are that server's own. Your own choices apply when UseMeUp starts a server for itself."
+            : "UseMeUp joined a server that was already running, so that server's own settings apply, whatever is shown above. Your own choices apply when UseMeUp starts a server for itself."
     }
 
     private func setLogin(_ want: Bool) {

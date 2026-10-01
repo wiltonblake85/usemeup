@@ -261,7 +261,8 @@ Which source the bundled server reads, and whether it may renew an expired
 access token, are chosen in the app's Settings and passed to the server
 explicitly. They apply only to a server the app starts for itself; a server it
 joined, or one standing in for the LaunchAgent, runs with that server's or the
-agent's settings, and Settings says which are in force.
+agent's settings. Settings then shows those settings, greyed out, rather than the
+app's own.
 
 To renew the token the server runs `claude -p ok`. It looks for `claude` on its
 PATH and then in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and
