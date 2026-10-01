@@ -249,13 +249,26 @@ with no Python setup. At launch the app asks port 8787 who is there
 (`/api/ping`). A UseMeUp server: it joins it. Some other program: it says so
 rather than fight for the port. Nobody, but `usemeup agent install` has set up
 the LaunchAgent: it waits up to 90 seconds for that agent, which starts at the
-same login. Otherwise it starts its bundled server, and stops it again on quit.
-If the server it was reading goes away, it goes through the same steps again.
+same login (five minutes in the first ten minutes after a restart, when the
+agent's Python starts cold). If the agent still has not answered, the app starts
+its bundled server in the agent's place, with the agent's settings. With no
+LaunchAgent set up, it starts its bundled server straight away. Either way it
+stops that server again on quit. If the server it was
+reading goes away, it goes through the same steps again. A server the app starts
+writes its output to `~/.usemeup/bundled.log`.
 
 Which source the bundled server reads, and whether it may renew an expired
-sign-in, are chosen in the app's Settings and passed to the server explicitly.
-They apply only to a server the app starts; a server it joined keeps its own
-settings, and Settings says which are in force.
+access token, are chosen in the app's Settings and passed to the server
+explicitly. They apply only to a server the app starts for itself; a server it
+joined, or one standing in for the LaunchAgent, runs with that server's or the
+agent's settings, and Settings says which are in force.
+
+To renew the token the server runs `claude -p ok`. It looks for `claude` on its
+PATH and then in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and
+`~/.claude/local`, because a server started by the app or by launchd gets a
+PATH with none of them. Its log says at startup whether it found it. When the
+figures stop updating, the drop-down says why under "Not live".
+
 Building needs the Xcode command line tools and a Homebrew `python3.12`.
 
 `build.sh` signs ad-hoc, which is enough on the Mac that built it. `release.sh`

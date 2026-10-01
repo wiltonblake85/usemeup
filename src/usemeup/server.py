@@ -232,6 +232,7 @@ def _limits_unlocked():
         prev = dict(_last_good[0])
         prev.update({"ok": True, "stale": True, "stale_reason": d.get("error"),
                      "stale_kind": d.get("reason"), "stale_since": prev.get("checked_at"),
+                     "stale_renewal": d.get("renewal"),
                      # The sign-in as it is NOW, not as it was at the last good
                      # reading: that is the whole point of showing it.
                      "signin": d.get("signin"), "token": d.get("token") or prev.get("token")})

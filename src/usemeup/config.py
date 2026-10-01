@@ -28,6 +28,7 @@ import datetime
 import hashlib
 import os
 import re
+import shutil
 import sys
 
 APP = "usemeup"
@@ -110,6 +111,22 @@ def local_day(ts):
     if t.tzinfo is None:
         t = t.replace(tzinfo=datetime.timezone.utc)
     return t.astimezone(LOCAL_TZ).date().isoformat()
+
+
+# ---------------------------------------------------------------- claude CLI
+# Where the `claude` command tends to live, searched after PATH. A process
+# started by launchd or by the menu bar app gets PATH=/usr/bin:/bin:/usr/sbin:
+# /sbin, which holds none of these. On 2026-09-30 the app's bundled server ran
+# that way for 15 hours and could never have renewed the token. The agent's
+# PATH and the token refresh both read this one list.
+CLI_DIRS = [os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin", "/usr/local/bin",
+            os.path.expanduser("~/.claude/local")]
+
+
+def claude_exe():
+    """Full path of the `claude` command: PATH first, then CLI_DIRS. None if absent."""
+    dirs = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p] + CLI_DIRS
+    return shutil.which("claude", path=os.pathsep.join(dirs))
 
 
 # ---------------------------------------------------------------- exclusions
@@ -233,9 +250,14 @@ def banner():
         "endpoint": "usage endpoint (reads the Claude Code token from the Keychain)",
         "statusline": "Claude Code status line (no credential, no network)",
         "auto": "usage endpoint, falling back to the Claude Code status line"}[SOURCE])
-    lines.append("auto-refresh: %s" % ("ON (will run `claude -p ok` when the token expires)"
-                                       if AUTO_REFRESH else
-                                       "off (set USEMEUP_AUTO_REFRESH=1 to enable)"))
+    if AUTO_REFRESH:
+        # Said at startup so a log shows whether renewal can actually work.
+        exe = claude_exe()
+        lines.append("auto-refresh: ON (will run `claude -p ok` when the token expires; %s)"
+                     % ("claude found at %s" % exe if exe else
+                        "WARNING: claude not found on PATH or in %s" % ", ".join(CLI_DIRS)))
+    else:
+        lines.append("auto-refresh: off (set USEMEUP_AUTO_REFRESH=1 to enable)")
     if OFFLINE:
         lines.append("offline mode: no price fetch; using the cached or bundled table.")
     return "\n".join(lines)

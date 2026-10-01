@@ -85,11 +85,43 @@ final class ServerSettings: ObservableObject {
 
     /// The environment for a spawned server: this app's own, with the two
     /// choices above written over whatever it carried.
-    func environment() -> [String: String] {
+    ///
+    /// `standingInFor` is the usemeup LaunchAgent's own EnvironmentVariables,
+    /// passed when the app starts its server only because that agent did not
+    /// answer in time. The server then stands in for the agent, so it takes
+    /// the agent's choices, not this app's. On 2026-09-30 a stand-in ran with
+    /// the app's renewal setting (off) while the agent's was on, and the bar
+    /// went grey for 15 hours when the access token ran out at 4:02 PM.
+    ///
+    /// PATH gets Claude Code's folder either way: an app opened from Finder or
+    /// at login has /usr/bin:/bin:/usr/sbin:/sbin, which has no `claude`, so
+    /// the server could not have renewed the token even with renewal on. The
+    /// server also searches those folders itself since 0.1.5; this is the
+    /// second line, for any older server binary.
+    func environment(standingInFor agent: [String: String]? = nil) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        env["USEMEUP_SOURCE"] = source.rawValue
-        if autoRefresh { env["USEMEUP_AUTO_REFRESH"] = "1" }
-        else { env.removeValue(forKey: "USEMEUP_AUTO_REFRESH") }
+        if let agent {
+            // Absent from the agent means the server's default there, so here too.
+            if let s = agent["USEMEUP_SOURCE"] { env["USEMEUP_SOURCE"] = s }
+            else { env.removeValue(forKey: "USEMEUP_SOURCE") }
+            if let r = agent["USEMEUP_AUTO_REFRESH"], !["", "0", "false", "False"].contains(r) {
+                env["USEMEUP_AUTO_REFRESH"] = "1"
+            } else {
+                env.removeValue(forKey: "USEMEUP_AUTO_REFRESH")
+            }
+        } else {
+            env["USEMEUP_SOURCE"] = source.rawValue
+            if autoRefresh { env["USEMEUP_AUTO_REFRESH"] = "1" }
+            else { env.removeValue(forKey: "USEMEUP_AUTO_REFRESH") }
+        }
+        var path: [String] = []
+        if let exe = ClaudeSignIn.claudePath() {
+            path.append(URL(fileURLWithPath: exe).deletingLastPathComponent().path)
+        }
+        path += (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        path += ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        var seen = Set<String>()
+        env["PATH"] = path.filter { !$0.isEmpty && seen.insert($0).inserted }.joined(separator: ":")
         return env
     }
 }

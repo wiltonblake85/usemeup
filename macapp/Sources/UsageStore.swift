@@ -51,6 +51,15 @@ final class UsageStore: ObservableObject {
     private var bringingUp = false
     /// The server on the port, as it described itself. Settings shows it.
     @Published private(set) var serverInfo: ServerInfo?
+    /// True while the server this app started is standing in for the usemeup
+    /// LaunchAgent, which did not answer in time. It then runs with the
+    /// agent's settings, and Settings greys out this app's own.
+    @Published private(set) var standingIn = false
+
+    /// Where a server this app starts writes its output. Before 0.1.5 it went
+    /// to /dev/null, so 15 hours of failed renewals left no trace.
+    static let bundledLog: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".usemeup/bundled.log")
 
     /// The `usemeup agent install` LaunchAgent. When it exists it owns the
     /// port, and this app waits for it rather than racing it at login.
@@ -164,8 +173,10 @@ final class UsageStore: ObservableObject {
     ///    login, and before 2026-09-25 this app won that race, spawned its
     ///    bundled copy, and left the agent failing to bind and restarting
     ///    every ten seconds, 3,737 times in 14.5 hours.
-    /// 4. Otherwise, or if the agent never answers: start the bundled server
-    ///    with the settings chosen in this app.
+    /// 4. If the agent never answers: start the bundled server in its place,
+    ///    with the agent's settings (since 0.1.5; see ServerSettings).
+    /// 5. No agent installed: start the bundled server with the settings
+    ///    chosen in this app.
     private func bringUpServer() async {
         guard !bringingUp else { return }
         bringingUp = true
@@ -175,6 +186,7 @@ final class UsageStore: ObservableObject {
         case .usemeup(let info):
             serverInfo = info
             link = .attached
+            standingIn = false
             await refresh()
             return
         case .foreign:
@@ -186,22 +198,56 @@ final class UsageStore: ObservableObject {
 
         if FileManager.default.fileExists(atPath: Self.agentPlist.path) {
             link = .waitingForAgent
-            let deadline = Date().addingTimeInterval(90)
+            // Just after a restart the agent's Python starts cold. On
+            // 2026-09-30 the Mac came up at 12:28 PM and the agent had not
+            // claimed the port 93 seconds later, so the app's stand-in took it.
+            // In the first ten minutes after a boot, give the agent five.
+            let patience: TimeInterval = ProcessInfo.processInfo.systemUptime < 600 ? 300 : 90
+            let deadline = Date().addingTimeInterval(patience)
             while Date() < deadline {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 if case .usemeup(let info) = await occupant() {
                     serverInfo = info
                     link = .attached
+                    standingIn = false
                     await refresh()
                     return
                 }
             }
-            NSLog("UseMeUp: the usemeup LaunchAgent is installed but nothing answered on %d in 90 s; starting the bundled server", Self.port)
+            NSLog("UseMeUp: the usemeup LaunchAgent is installed but nothing answered on %d in %.0f s; starting the bundled server in its place, with its settings", Self.port, patience)
+            await spawn(standingInFor: Self.agentEnvironment())
+            return
         }
         await spawn()
     }
 
-    private func spawn() async {
+    /// The LaunchAgent's EnvironmentVariables, or an empty set when its plist
+    /// cannot be read (the stand-in then runs with the server's defaults).
+    static func agentEnvironment() -> [String: String] {
+        guard let data = try? Data(contentsOf: agentPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let env = plist["EnvironmentVariables"] as? [String: String] else { return [:] }
+        return env
+    }
+
+    /// Append to bundledLog, starting it over once it passes 2 MB.
+    private func bundledLogHandle() -> FileHandle? {
+        let fm = FileManager.default
+        let path = Self.bundledLog.path
+        try? fm.createDirectory(at: Self.bundledLog.deletingLastPathComponent(),
+                                withIntermediateDirectories: true)
+        let size = (try? fm.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        if !fm.fileExists(atPath: path) || size > 2_000_000 {
+            fm.createFile(atPath: path, contents: nil)
+        }
+        guard let h = FileHandle(forWritingAtPath: path) else { return nil }
+        h.seekToEndOfFile()
+        return h
+    }
+
+    /// Start the bundled server. `standingInFor` is the agent's environment
+    /// when this server takes the agent's place (see ServerSettings.environment).
+    private func spawn(standingInFor agent: [String: String]? = nil) async {
         guard let exe = bundledServer() else {
             link = .failed("No server is running on port \(Self.port), and this build has no bundled server in Contents/Resources/server.")
             return
@@ -210,13 +256,17 @@ final class UsageStore: ObservableObject {
         p.executableURL = exe
         p.arguments = ["serve", "--no-open"]
         // Explicit, not inherited: see ServerSettings.
-        p.environment = ServerSettings.shared.environment()
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
+        p.environment = ServerSettings.shared.environment(standingInFor: agent)
+        let log = bundledLogHandle()
+        p.standardOutput = log ?? FileHandle.nullDevice
+        p.standardError = log ?? FileHandle.nullDevice
         do { try p.run() } catch {
+            try? log?.close()
             link = .failed("Could not start the bundled server: \(error.localizedDescription)")
             return
         }
+        // The child has its own copy of the descriptor now.
+        try? log?.close()
         server = p
 
         // The server claims the port and answers /api/ping at once, then
@@ -228,6 +278,7 @@ final class UsageStore: ObservableObject {
             if case .usemeup(let info) = await occupant() {
                 serverInfo = info
                 link = .spawned
+                standingIn = agent != nil
                 await refresh()
                 return
             }
@@ -239,7 +290,8 @@ final class UsageStore: ObservableObject {
     /// Restart a server this app started, so a changed setting takes effect.
     /// A server the app joined keeps its own settings and is left alone.
     func applyServerSettings() async {
-        guard link == .spawned, let p = server else { return }
+        // A stand-in runs with the agent's settings, not these.
+        guard link == .spawned, !standingIn, let p = server else { return }
         p.terminate()
         let deadline = Date().addingTimeInterval(10)
         while p.isRunning && Date() < deadline {

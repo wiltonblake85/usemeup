@@ -21,6 +21,7 @@ What is in it:
   stale              the last probe failed and these are the last good figures
   live               false once those figures should stop passing as current
                      (signed out, or stale for over panel.LIVE_GRACE_SECONDS)
+  stale_why          while stale, one sentence on why (panel.stale_why)
   signin             Claude Code's sign-in: state, ends_at, ends_label, and a
                      message when something needs doing (panel.signin_view)
   ok, hours_per_day, hours_label, sample_days
@@ -67,6 +68,9 @@ def build(usage, limits, priors=None, now=None):
         # where Claude Code's sign-in stands, with a sentence when it needs doing.
         "live": panel.is_live(limits or {}),
         "signin": panel.signin_view(limits or {}),
+        # Added 2026-10-01, optional: one sentence on why the figures stopped
+        # updating (panel.stale_why), None while they are current.
+        "stale_why": panel.stale_why(limits or {}),
         "source": (limits or {}).get("strategy"),
         "ok": bool(full.get("ok")),
         "error": full.get("error"),

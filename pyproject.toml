@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "usemeup"
-version = "0.1.4"
+version = "0.1.5"
 description = "A local Claude usage dashboard that can prove its own numbers: rate-limit windows, burn-rate projection, and a verifier that recounts from raw transcripts."
 readme = "README.md"
 requires-python = ">=3.9"

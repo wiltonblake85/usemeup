@@ -38,8 +38,7 @@ ERR = os.path.join(config.DB_DIR, "agent.err")
 
 # Where `claude` tends to live. The agent's PATH is built from these plus the
 # installing shell's PATH, so the token refresh can find the CLI.
-_PATH_HINTS = [os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin", "/usr/local/bin",
-               "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+_PATH_HINTS = config.CLI_DIRS + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
 
 
 def _domain():

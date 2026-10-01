@@ -137,9 +137,13 @@ struct MenuBarPayload: Codable {
     /// The same moment as this Mac's clock reads it: "2:47 AM", or
     /// "Mon Sep 28 at 11:02 PM" on another day.
     let staleLabel: String?
+    /// Added 2026-10-01: one sentence on why the figures stopped updating
+    /// (panel.stale_why). Absent from an older server and while live.
+    let staleWhy: String?
 
     enum CodingKeys: String, CodingKey {
         case ok, error, worst, windows, alerts, signin, live
+        case staleWhy = "stale_why"
         case checkedAt  = "checked_at"
         case hoursPerDay = "hours_per_day"
         case hoursLabel = "hours_label"

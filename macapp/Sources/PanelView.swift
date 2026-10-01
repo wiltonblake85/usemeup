@@ -41,7 +41,8 @@ struct PanelView: View {
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     if !store.isLive, store.payload?.signin?.signedOut != true {
-                        Text("Not live: these figures are from \(store.payload?.staleLabel ?? "an earlier reading"). UseMeUp keeps trying.")
+                        // Since 0.1.5 it also says why, so a grey bar is never a guess.
+                        Text("Not live: these figures are from \(store.payload?.staleLabel ?? "an earlier reading").\(store.payload?.staleWhy.map { " " + $0 } ?? "") UseMeUp keeps trying.")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.bottom, 12)

@@ -214,11 +214,29 @@ def signin_summary(meta, now=None):
 # transcript behind. And when a renewal does fail while it should have worked
 # (the network was down, say), the next try waits twice as long as the last,
 # up to REFRESH_BACKOFF_CAP, instead of repeating every ten minutes forever.
-REFRESH_CMD = ["claude", "-p", "ok", "--model", "claude-haiku-4-5"]
+#
+# The command is found by claude_exe(), never by trusting PATH alone: a server
+# started by the menu bar app or by launchd has PATH=/usr/bin:/bin:/usr/sbin:/sbin,
+# and `claude` lives in ~/.local/bin.
+REFRESH_ARGS = ["-p", "ok", "--model", "claude-haiku-4-5"]
 REFRESH_CWD = config.REFRESH_CWD
 REFRESH_COOLDOWN = 600      # never more than once every 10 minutes
 REFRESH_BACKOFF_CAP = 4 * 3600
 _refresh_state = {"last": 0.0, "fails": 0}
+
+
+def claude_exe():
+    """Full path of the `claude` command, or None (config.claude_exe)."""
+    return config.claude_exe()
+
+
+def renewal_state(auto_refresh=None):
+    """Why an expired token is or is not being renewed: "off", "no_cli" or "on"."""
+    if auto_refresh is None:
+        auto_refresh = config.AUTO_REFRESH
+    if not auto_refresh:
+        return "off"
+    return "on" if claude_exe() else "no_cli"
 
 
 def refresh_wait():
@@ -238,15 +256,24 @@ def refresh_via_claude_code():
         return {"ran": False, "reason": "waiting; the last attempt was under %d minutes ago"
                 % (wait // 60)}
     _refresh_state["last"] = time.time()
+    exe = claude_exe()
+    if not exe:
+        return {"ran": False, "reason": "the `claude` command was not found on PATH or in %s"
+                % ", ".join(config.CLI_DIRS)}
+    # Claude Code may shell out itself, so its own folder and the system
+    # folders go on the PATH it gets.
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join(p for p in [os.path.dirname(exe), env.get("PATH", ""),
+                                              "/usr/bin:/bin:/usr/sbin:/sbin"] if p)
     try:
         os.makedirs(REFRESH_CWD, exist_ok=True)
         with open(os.devnull) as devnull:
-            out = subprocess.run(REFRESH_CMD, cwd=REFRESH_CWD, stdin=devnull,
-                                 capture_output=True, text=True, timeout=120)
+            out = subprocess.run([exe] + REFRESH_ARGS, cwd=REFRESH_CWD, stdin=devnull,
+                                 env=env, capture_output=True, text=True, timeout=120)
         return {"ran": True, "returncode": out.returncode,
                 "detail": _safe(((out.stdout or "") + (out.stderr or "")).strip()[:200])}
     except FileNotFoundError:
-        return {"ran": False, "reason": "the `claude` CLI is not on PATH for this process"}
+        return {"ran": False, "reason": "the `claude` command at %s could not be started" % exe}
     except Exception as e:
         return {"ran": False, "reason": "%s: %s" % (type(e).__name__, e)}
 
@@ -427,10 +454,13 @@ def _probe_endpoint(allow_ping=False, auto_refresh=None):
     if not token:
         base["error"] = meta.get("error", "no usable credential")
         base["reason"] = "no_credential" if meta.get("missing") or not source else "token_expired"
+        if base["reason"] == "token_expired":
+            base["renewal"] = renewal_state(auto_refresh)
         return base
 
     if meta.get("expired"):
         base["reason"] = "token_expired"
+        base["renewal"] = renewal_state(auto_refresh)
         why = (("Tried to renew it through Claude Code and it did not take: %s"
                 % (refresh.get("detail") or refresh.get("reason")))
                if refresh else

@@ -826,6 +826,37 @@ def is_live(limits: Dict[str, Any], now: Optional[float] = None) -> bool:
     return since is not None and now - since < LIVE_GRACE_SECONDS
 
 
+def stale_why(limits: Dict[str, Any], now: Optional[float] = None) -> Optional[str]:
+    """One sentence on why the figures stopped updating, or None.
+
+    The panel already said "Not live: these figures are from 4:01 PM" but never
+    why. On 2026-09-30 the access token ran out at 4:02 PM and the server that
+    held the port was set not to renew it and could not have found `claude` if
+    it were; the drop-down stayed grey for 15 hours with no reason given.
+    None while the figures are current, and None for signed out or missing,
+    which signin_view already explains with a Sign in button.
+    """
+    if not limits or not limits.get("stale"):
+        return None
+    kind = limits.get("stale_kind")
+    if kind in _NOT_LIVE_AT_ONCE:
+        return None
+    if kind == "token_expired":
+        exp = _parse(((limits.get("token") or {}).get("expires_at")))
+        when = _fmt_when(exp, now)
+        ran_out = ("Claude Code's access token ran out %s %s" % ("on" if " at " in when else "at", when)
+                   if when else "Claude Code's access token ran out")
+        renewal = limits.get("stale_renewal")
+        if renewal == "off":
+            return ran_out + ", and the server UseMeUp is reading is set not to renew it."
+        if renewal == "no_cli":
+            return ran_out + ", and UseMeUp could not find the claude command to renew it."
+        return ran_out + ", and renewing it has not worked yet."
+    if kind == "rate_limited":
+        return "Anthropic is turning away UseMeUp's checks for now, so it is waiting before it asks again."
+    return "UseMeUp's last check of your limits did not go through."
+
+
 def signin_view(limits: Dict[str, Any], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """What every surface says about Claude Code's sign-in, as sentences.
 
@@ -924,7 +955,7 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
     # good reading since the server started still needs the Sign in button.
     stale_since = (limits or {}).get("stale_since") if (limits or {}).get("stale") else None
     about = {"signin": signin, "live": is_live(limits), "stale_since": stale_since,
-             "stale_label": _fmt_when(_parse(stale_since))}
+             "stale_label": _fmt_when(_parse(stale_since)), "stale_why": stale_why(limits)}
     if not full.get("ok"):
         out = {"ok": False, "error": full.get("error"), "windows": [], "worst": None,
                "alerts": [s_alert] if s_alert else []}

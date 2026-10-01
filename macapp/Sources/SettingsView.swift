@@ -82,12 +82,12 @@ struct SettingsView: View {
             Picker("Rate limits from", selection: $serverSettings.source) {
                 ForEach(RateSource.allCases) { Text($0.title).tag($0) }
             }
-            .disabled(store.link == .attached)
+            .disabled(store.link == .attached || store.standingIn)
             .onChange(of: serverSettings.source) { _, _ in
                 Task { await store.applyServerSettings() }
             }
             Toggle("Renew the access token by running claude -p ok when it expires", isOn: $serverSettings.autoRefresh)
-                .disabled(store.link == .attached || serverSettings.source == .statusline)
+                .disabled(store.link == .attached || store.standingIn || serverSettings.source == .statusline)
                 .onChange(of: serverSettings.autoRefresh) { _, _ in
                     Task { await store.applyServerSettings() }
                 }
@@ -137,7 +137,8 @@ struct SettingsView: View {
         case .starting:        return "starting…"
         case .waitingForAgent: return "waiting for the usemeup LaunchAgent to start"
         case .attached:        return "joined the one already running on 8787" + pidText
-        case .spawned:         return "started by this app on 8787" + pidText
+        case .spawned:         return (store.standingIn ? "started by this app on 8787 in place of the usemeup LaunchAgent"
+                                                         : "started by this app on 8787") + pidText
         case .failed(let w):   return w
         }
     }
@@ -145,6 +146,11 @@ struct SettingsView: View {
     /// When the app joined a server it did not start, the pickers above are
     /// greyed out, and this says which settings are actually in force.
     private var serverNote: String {
+        if store.standingIn {
+            let name = store.serverInfo?.source.map { RateSource(rawValue: $0)?.title.lowercased() ?? $0 }
+            let renew = (store.serverInfo?.autoRefresh ?? false) ? ", renewing the access token when it expires" : ""
+            return "The usemeup LaunchAgent did not answer in time, so UseMeUp started its own server in its place, with the LaunchAgent's settings" + (name.map { ": \($0)\(renew)" } ?? "") + ". These choices take effect when UseMeUp starts its own server for itself."
+        }
         guard store.link == .attached else { return serverSettings.source.blurb }
         guard let info = store.serverInfo, let raw = info.source else {
             return "UseMeUp joined a server that was already running, so that server's own settings apply. These choices take effect when UseMeUp starts its own server."
