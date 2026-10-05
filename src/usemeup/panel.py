@@ -878,7 +878,8 @@ def signin_view(limits: Dict[str, Any], now: Optional[float] = None) -> Optional
     left = s.get("seconds_left")
     if ends is not None:
         left = max(0, int(ends - now))
-    out = {"state": state, "ends_at": s.get("ends_at"), "seconds_left": left,
+    out = {"state": state, "ends_at": s.get("ends_at"),
+           "signin_ends_at": s.get("signin_ends_at"), "seconds_left": left,
            "ends_label": _fmt_when(ends, now, dated=True), "message": None, "tone": None,
            "action": None}
 
@@ -908,18 +909,20 @@ def signin_alert(view: Optional[Dict[str, Any]],
     """The one notification the sign-in currently deserves, or None.
 
     Same contract as alert_for: the id is stable, the app shows each id once.
-    The id carries the day the sign-in ends, so each sign-in warns once and
-    lapses once, and a new sign-in (a new end date) can warn again. The key
-    part, "signin", is no window's, so no window's on/off setting hides it.
+    The id carries the day the sign-in itself ends (signin_ends_at), so each
+    sign-in warns once and lapses once, and a new sign-in (a new end date) can
+    warn again. ends_at is not used for it: it switches from the sign-in's end
+    to the last access token's when renewal stops, and on 2026-09-28/29 that
+    crossed midnight UTC, which would have posted "signed out" twice. With no
+    sign-in saved there is no end date, and the id is fixed, so "missing" is
+    said once rather than once a day. The key part, "signin", is no window's,
+    so no window's on/off setting hides it. `now` is kept for callers; the id
+    no longer depends on it.
     """
     if not view or not view.get("message"):
         return None
-    ends = view.get("ends_at")
-    if ends:
-        day = ends[:10]
-    else:
-        n = now if now is not None else _dt.datetime.now(_dt.timezone.utc).timestamp()
-        day = _dt.datetime.fromtimestamp(n).strftime("%Y-%m-%d")
+    ends = view.get("signin_ends_at") or view.get("ends_at")
+    day = ends[:10] if ends else "none"
     state = view.get("state")
     if state == "expiring":
         return {"id": "signin|%s|expiring" % day, "kind": "signin",

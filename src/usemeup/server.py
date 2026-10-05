@@ -192,6 +192,35 @@ def _limits():
         return _limits_unlocked()
 
 
+SIGNIN_RECHECK = TTL_LIMITS_ERROR
+_signin_checked_at = [0.0]
+
+
+def _signed_in_again(cur):
+    """True when a good reading taken while the sign-in was ending is outdated
+    by a new sign-in, so the warning and its button can go without waiting out
+    TTL_LIMITS. Without it the app re-polled 65 seconds after "Sign in again"
+    and still got the cached "ends in 2 days" for up to five minutes.
+
+    Only the saved credential is re-read, at most once per SIGNIN_RECHECK, and
+    only in that state, so the expiring days cost no extra API calls; a new
+    sign-in shows as a new signin_ends_at. The throttle is on the re-read, not
+    on the reading's age: the first re-read after a sign-in sees it, and the
+    app's poll 65 seconds after one is always due a re-read.
+    """
+    was = cur.get("signin") or {}
+    if was.get("state") != "expiring":
+        return False
+    if time.time() - _signin_checked_at[0] < SIGNIN_RECHECK:
+        return False
+    _signin_checked_at[0] = time.time()
+    try:
+        now = rate_limits.signin_summary(rate_limits._token()[2])
+    except Exception:
+        return False
+    return bool(now) and now.get("signin_ends_at") != was.get("signin_ends_at")
+
+
 def _limits_unlocked():
     cur, age = _cache["limits"], time.time() - _cache["limits_at"]
     if cur:
@@ -208,7 +237,7 @@ def _limits_unlocked():
             ttl = TTL_LIMITS_ERROR
         else:
             ttl = TTL_LIMITS     # a failed network call: do not retry it any sooner
-        if age < ttl:
+        if age < ttl and not _signed_in_again(cur):
             return cur
 
     try:

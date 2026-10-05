@@ -323,5 +323,109 @@ class ServerTiming(unittest.TestCase):
         self.assertEqual(self.probes, 1)
 
 
+class OneNotificationPerLapse(unittest.TestCase):
+    """The alert id must not move while the sign-in it describes stays the same."""
+
+    # The sign-in ends 5 PM EDT on Sep 28; the last access token runs to 11 PM,
+    # which is already Sep 29 in UTC.
+    ENDS = NOW_MS - 22 * HOUR_MS
+    LAST_TOKEN = NOW_MS - 16 * HOUR_MS
+
+    def alert(self, blob):
+        _, _, meta = meta_of(blob)
+        s = rate_limits.signin_summary(meta, now=NOW)
+        return panel.signin_alert(panel.signin_view({"signin": s}, NOW.timestamp()))
+
+    def blob(self, tokens):
+        b = cred(access=tokens, refresh=tokens, expires_in_ms=None, refresh_in_ms=None)
+        b["claudeAiOauth"].update(expiresAt=self.LAST_TOKEN, refreshTokenExpiresAt=self.ENDS)
+        return b
+
+    def test_emptying_the_tokens_does_not_say_signed_out_twice(self):
+        before = self.alert(self.blob(tokens=True))      # token ran out, still saved
+        after = self.alert(self.blob(tokens=False))      # Claude Code emptied both
+        self.assertEqual(before["title"], "Claude Code is signed out")
+        self.assertEqual(before["id"], after["id"])
+        self.assertEqual(after["id"], "signin|2026-09-28|signed_out")
+
+    def test_the_sign_in_ending_under_a_live_token_does_not_warn_twice(self):
+        renewing = cred(expires_in_ms=HOUR_MS, refresh_in_ms=2 * HOUR_MS)
+        ended = cred(expires_in_ms=HOUR_MS, refresh_in_ms=-HOUR_MS)
+        a, b = self.alert(renewing), self.alert(ended)
+        self.assertEqual((a["id"], b["id"]),
+                         ("signin|2026-09-29|expiring", "signin|2026-09-29|expiring"))
+        late = cred(expires_in_ms=6 * HOUR_MS, refresh_in_ms=-HOUR_MS)   # token into Sep 30 UTC
+        self.assertEqual(self.alert(late)["id"], "signin|2026-09-29|expiring")
+
+    def test_a_new_sign_in_can_warn_again(self):
+        old = self.alert(cred(refresh_in_ms=2 * DAY_MS))
+        new = self.alert(cred(refresh_in_ms=30 * DAY_MS - HOUR_MS))
+        self.assertIsNotNone(old)
+        self.assertIsNone(new)           # a fresh month says nothing yet
+        later = cred(refresh_in_ms=2 * DAY_MS)
+        later["claudeAiOauth"]["refreshTokenExpiresAt"] += 28 * DAY_MS
+        s = rate_limits.signin_summary(meta_of(later)[2], now=NOW + _dt.timedelta(days=28))
+        v = panel.signin_view({"signin": s}, (NOW + _dt.timedelta(days=28)).timestamp())
+        self.assertNotEqual(panel.signin_alert(v)["id"], old["id"])
+
+    def test_no_sign_in_saved_is_said_once_not_daily(self):
+        s = rate_limits.signin_summary({"missing": True, "can_renew": False})
+        ids = {panel.signin_alert(panel.signin_view({"signin": s}, t), t)["id"]
+               for t in (NOW.timestamp(), NOW.timestamp() + DAY_MS / 1000,
+                         NOW.timestamp() + 9 * DAY_MS / 1000)}
+        self.assertEqual(ids, {"signin|none|missing"})
+
+
+class SignedInAgainWhileExpiring(unittest.TestCase):
+    """After "Sign in again" the warning goes within a minute, not five."""
+
+    def setUp(self):
+        self._saved = (rate_limits.probe, rate_limits._token, dict(server._cache),
+                       list(server._signin_checked_at))
+        self.probes, self.reads = 0, 0
+        self.keychain = cred(refresh_in_ms=2 * DAY_MS)
+
+        def probe():
+            self.probes += 1
+            s = rate_limits.signin_summary(meta_of(self.keychain)[2], now=NOW)
+            return {"ok": True, "windows": [], "checked_at": NOW.isoformat(), "signin": s}
+
+        def token():
+            self.reads += 1
+            return meta_of(self.keychain)
+
+        rate_limits.probe, rate_limits._token = probe, token
+        server._cache["limits"], server._cache["limits_at"] = None, 0
+        server._signin_checked_at[0] = 0.0
+
+    def tearDown(self):
+        rate_limits.probe, rate_limits._token, cache, chk = self._saved
+        server._cache.clear()
+        server._cache.update(cache)
+        server._signin_checked_at[:] = chk
+
+    def test_a_new_sign_in_is_read_at_the_next_check(self):
+        self.assertEqual(server._limits_unlocked()["signin"]["state"], "expiring")
+        self.keychain = cred(refresh_in_ms=30 * DAY_MS)          # "Sign in again"
+        d = server._limits_unlocked()
+        self.assertEqual(self.probes, 2)
+        self.assertEqual(d["signin"]["state"], "ok")
+
+    def test_no_new_sign_in_costs_no_api_call_and_one_read_a_minute(self):
+        server._limits_unlocked()
+        for _ in range(5):
+            server._limits_unlocked()
+        self.assertEqual((self.probes, self.reads), (1, 1))
+        server._signin_checked_at[0] -= server.SIGNIN_RECHECK
+        server._limits_unlocked()
+        self.assertEqual((self.probes, self.reads), (1, 2))
+
+    def test_a_healthy_sign_in_is_never_re_read(self):
+        self.keychain = cred()                                   # a month to run
+        for _ in range(3):
+            server._limits_unlocked()
+        self.assertEqual((self.probes, self.reads), (1, 0))
+
+
 if __name__ == "__main__":
     unittest.main()
