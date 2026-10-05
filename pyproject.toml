@@ -36,3 +36,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 usemeup = ["index.html", "pricing.json"]
+
+# So `python3 -m pytest tests` finds the package from a clone, as the README says.
+[tool.pytest.ini_options]
+pythonpath = ["src"]
