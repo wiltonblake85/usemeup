@@ -912,8 +912,8 @@ def signin_alert(view: Optional[Dict[str, Any]],
     The id carries the day the sign-in itself ends (signin_ends_at), so each
     sign-in warns once and lapses once, and a new sign-in (a new end date) can
     warn again. ends_at is not used for it: it switches from the sign-in's end
-    to the last access token's when renewal stops, and on 2026-09-28/29 that
-    crossed midnight UTC, which would have posted "signed out" twice. With no
+    to the last access token's when renewal stops, and whenever those two fall
+    on different UTC days that would post "signed out" twice. With no
     sign-in saved there is no end date, and the id is fixed, so "missing" is
     said once rather than once a day. The key part, "signin", is no window's,
     so no window's on/off setting hides it. `now` is kept for callers; the id
