@@ -101,9 +101,17 @@ final class ServerSettings: ObservableObject {
     func environment(standingInFor agent: [String: String]? = nil) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         if let agent {
-            // Absent from the agent means the server's default there, so here too.
-            if let s = agent["USEMEUP_SOURCE"] { env["USEMEUP_SOURCE"] = s }
-            else { env.removeValue(forKey: "USEMEUP_SOURCE") }
+            // Every choice `usemeup agent install` can write (agent.build_plist),
+            // so the stand-in records into the agent's database and splits days
+            // in its time zone. Until 2026-10-05 only the source was copied, and a
+            // stand-in for an agent with USEMEUP_DB set sampled into the default
+            // database, leaving a hole in the agent's history. Absent from the
+            // agent means the server's default there, so here too.
+            // USEMEUP_PORT is left out on purpose: this app only ever talks to
+            // UsageStore.port, so a stand-in anywhere else could not be reached.
+            for k in ["USEMEUP_SOURCE", "USEMEUP_TZ", "USEMEUP_DB", "USEMEUP_OFFLINE", "USEMEUP_DEMO"] {
+                if let v = agent[k] { env[k] = v } else { env.removeValue(forKey: k) }
+            }
             if let r = agent["USEMEUP_AUTO_REFRESH"], !["", "0", "false", "False"].contains(r) {
                 env["USEMEUP_AUTO_REFRESH"] = "1"
             } else {

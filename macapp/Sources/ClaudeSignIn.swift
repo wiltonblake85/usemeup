@@ -31,6 +31,10 @@ final class ClaudeSignIn: ObservableObject {
     /// code" and end the sign-in before the browser answers.
     private var input: Pipe?
     private var giveUp: Task<Void, Never>?
+    /// Counts Sign in attempts, so a process that ends after its attempt was
+    /// cancelled or replaced is recognised as old. A number, not the Process's
+    /// identity: a freed Process's address can be reused by the next one.
+    private var attempt = 0
 
     /// Ten minutes to find the tab and click. Past that the attempt is
     /// abandoned so a forgotten tab does not hold a process forever.
@@ -51,6 +55,8 @@ final class ClaudeSignIn: ObservableObject {
             phase = .failed("Claude Code is not installed where UseMeUp looks (~/.local/bin, /opt/homebrew/bin or /usr/local/bin). Install it from claude.com/code, then try again.")
             return
         }
+        attempt += 1
+        let mine = attempt
         let p = Process()
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = ["auth", "login", "--claudeai"]
@@ -68,7 +74,7 @@ final class ClaudeSignIn: ObservableObject {
             let data = output.fileHandleForReading.readDataToEndOfFile()
             let text = String(decoding: data, as: UTF8.self)
             let code = proc.terminationStatus
-            Task { @MainActor in ClaudeSignIn.shared.finished(code, text) }
+            Task { @MainActor in ClaudeSignIn.shared.finished(mine, code, text) }
         }
         do { try p.run() } catch {
             phase = .failed("Could not start Claude Code: \(error.localizedDescription)")
@@ -85,13 +91,24 @@ final class ClaudeSignIn: ObservableObject {
         }
     }
 
+    /// Lets go of the process as well as stopping it, so a Sign in clicked
+    /// before it has exited starts clean. Until 2026-10-05 the old process stayed
+    /// in `process`, and when it exited its `finished` closed the new
+    /// attempt's stdin, cancelled its timeout and marked it failed while the
+    /// browser was still waiting on it.
     func cancel(reason: String = "Sign-in cancelled.") {
         guard let p = process, p.isRunning else { return }
         p.terminate()
+        process = nil
+        input = nil
+        giveUp?.cancel()
         phase = .failed(reason)
     }
 
-    private func finished(_ code: Int32, _ text: String) {
+    /// `mine` is the attempt whose process ended. One this app has already let
+    /// go of (cancelled, or replaced by a new Sign in) is ignored.
+    private func finished(_ mine: Int, _ code: Int32, _ text: String) {
+        guard mine == attempt, process != nil else { return }
         giveUp?.cancel()
         process = nil
         input = nil
