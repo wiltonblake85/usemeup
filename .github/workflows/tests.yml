@@ -23,8 +23,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       # pytest is the only thing installed; the package itself has no dependencies.
