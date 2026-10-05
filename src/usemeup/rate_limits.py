@@ -172,11 +172,16 @@ def signin_summary(meta, now=None):
                 can renew, that is the sign-in's own end; once it cannot, it is
                 the last access token's, because readings carry on until then.
     seconds_left  until ends_at, floored at zero
+    signin_ends_at  the sign-in's own end (refreshTokenExpiresAt), or None. Unlike
+                ends_at it does not move when the access token outlives the
+                sign-in or Claude Code empties the tokens, so notification ids
+                are built from it.
     """
     if not meta or ("has_access" not in meta and not meta.get("missing")):
         return None                     # no credential was read (status line source)
     if meta.get("missing"):
-        return {"state": "missing", "ends_at": None, "seconds_left": None}
+        return {"state": "missing", "ends_at": None, "seconds_left": None,
+                "signin_ends_at": None}
     ends = meta.get("refresh_expires_at") if meta.get("can_renew") else (
         meta.get("expires_at") if meta.get("has_access") else None)
     if not ends and not meta.get("can_renew"):
@@ -197,7 +202,8 @@ def signin_summary(meta, now=None):
         state = "expiring"
     else:
         state = "ok"
-    return {"state": state, "ends_at": ends, "seconds_left": left}
+    return {"state": state, "ends_at": ends, "seconds_left": left,
+            "signin_ends_at": meta.get("refresh_expires_at")}
 
 
 # --- Keeping the token fresh without ever touching the refresh token -------------

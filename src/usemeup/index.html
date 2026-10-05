@@ -863,7 +863,7 @@ function renderMeters(d) {
     const tk = d && d.token || {};
     el.innerHTML = `<div class="note"><strong>Live rate limits unavailable.</strong><br>${esc(why)}
       ${fix ? "<br><br><strong>Fix:</strong> " + fix : ""}
-      ${tk.refresh_expires_at && !tk.refresh_expired ? `<br><br>The sign-in itself runs until
+      ${tk.can_renew && tk.refresh_expires_at && !tk.refresh_expired ? `<br><br>The sign-in itself runs until
         ${esc(new Date(tk.refresh_expires_at).toLocaleString())}, so renewing the token is all it takes.` : ""}
       ${tried ? "<br><br>What it tried:<br>" + tried : ""}
       <br><br>Everything below is read from local files and is unaffected.</div>`;
