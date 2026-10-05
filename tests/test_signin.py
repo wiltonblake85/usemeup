@@ -156,13 +156,16 @@ class ProbeWhileSignedOut(unittest.TestCase):
         class Failed:
             returncode, stdout, stderr = 1, "", "OAuth session expired"
 
-        real_run = rate_limits.subprocess.run
+        real_run, real_exe = rate_limits.subprocess.run, rate_limits.claude_exe
         rate_limits.subprocess.run = lambda *a, **k: ran.append(a) or Failed()
+        # A machine without Claude Code (a CI runner) would stop at "not found"
+        # before the run this test counts.
+        rate_limits.claude_exe = lambda: "/usr/local/bin/claude"
         try:
             d1 = rate_limits._probe_endpoint(auto_refresh=True)
             d2 = rate_limits._probe_endpoint(auto_refresh=True)
         finally:
-            rate_limits.subprocess.run = real_run
+            rate_limits.subprocess.run, rate_limits.claude_exe = real_run, real_exe
         self.assertEqual(len(ran), 1)
         self.assertEqual(d1["reason"], "token_expired")
         self.assertEqual(d2["refresh"]["ran"], False)
