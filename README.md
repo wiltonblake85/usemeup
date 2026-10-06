@@ -60,11 +60,15 @@ The sign-in behind that token lasts about a month, and no Claude Code call can e
 ## Why another usage meter
 
 There are plenty of menu bar meters for Claude limits. Most stop at a percentage
-and a countdown, and the ones I found that forecast all do it the same way:
-percent used, divided by the fraction of the window that has elapsed. That
-treats a 7-day window as 168 equal hours. Nobody spends anything while asleep, so by Monday breakfast that arithmetic says you're
-comfortably under pace, and by Wednesday afternoon it says you'll blow through
-the limit on Sunday night. Both readings come from the clock, not from you.
+and a countdown, and the simple forecasts divide percent used by the fraction of
+the window that has elapsed. That treats a 7-day window as 168 equal hours.
+Nobody spends anything while asleep, so by Monday breakfast that arithmetic says
+you're comfortably under pace, and by Wednesday afternoon it says you'll blow
+through the limit on Sunday night. Both readings come from the clock, not from
+you.
+
+ReserveGauge, a paid Mac app, also paces on your daily rhythm. UseMeUp does it
+for free, under MIT, in a codebase with no dependencies to audit.
 
 On my own account, switching the basis from the clock to my working hours moved
 one weekly forecast from "hits 100% Sunday 7:38 PM" to "does not hit 100%". The
