@@ -422,6 +422,29 @@ def verdict_for(gap: float) -> Tuple[str, str, str]:
     return "on pace", "", "neutral"
 
 
+# The verdict in two or three words, as an instruction rather than a
+# description: what to do about the slope. Keyed on the verdict so the two can
+# never disagree. index.html carries the same table for the page, and
+# test_panel checks the copies match. "not in use" gets none: there is nothing
+# to do about a window nobody is using.
+NUDGES = {
+    "well under pace": "Room to spare",
+    "a little under pace": "Keep going",
+    "on pace": "On pace",
+    "slightly ahead of pace": "Ease up",
+    "ahead of pace": "Slow down",
+}
+
+
+def nudge_for(verdict: str, key: str) -> Optional[str]:
+    """The short call for a verdict, or None. A spent model-scoped window has a
+    way out (the same work on another model); a spent all-models or 5-hour
+    window does not, so it can only wait."""
+    if verdict == "spent":
+        return "Switch models" if key.startswith("weekly_scoped") else "Wait for reset"
+    return NUDGES.get(verdict)
+
+
 # ---------------------------------------------------------------- payload
 
 def _fmt_reset(epoch: Optional[float]) -> Optional[str]:
@@ -604,6 +627,7 @@ def build_window(win: Dict[str, Any], weights: Optional[Dict[str, Any]],
         "label": PANEL_LABELS.get(win.get("key"), win.get("name") or win.get("key")),
         "used_pct": used,
         "verdict": verdict,
+        "nudge": nudge_for(verdict, win.get("key") or ""),
         "tone": tone,
         "state": state,
         "source": b.get("basis") if b["on"] else "clock",
@@ -665,7 +689,7 @@ def build(usage: Dict[str, Any], limits: Dict[str, Any],
 MENUBAR_KEYS = ("session", "weekly_all", "weekly_scoped")
 
 # Everything build_window returns except the three plotted series.
-MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "advice", "verdict", "tone",
+MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "advice", "verdict", "nudge", "tone",
                   "state", "source", "kicker", "detail", "basis", "resets_at",
                   "over_cap")
 

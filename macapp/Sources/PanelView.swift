@@ -133,11 +133,23 @@ private struct WindowRow: View {
         [window.kicker, window.detail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
+    private var nudge: String? {
+        guard let n = window.nudge, !n.isEmpty else { return nil }
+        return n
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(window.label).font(.system(size: 12, weight: .semibold))
                 Spacer()
+                // The call, beside the figure it is about, so a glance gets
+                // both: "Ease up 61%".
+                if let n = nudge {
+                    Text(n)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(window.severity == .calm ? Color.secondary : window.severity.color)
+                }
                 Text(window.shortPct)
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .monospacedDigit()
@@ -160,8 +172,11 @@ private struct WindowRow: View {
             BurnChart(window: window)
                 .padding(.top, 4)
 
-            Text(window.verdict.sentenceCased)
-                .font(.system(size: 11)).foregroundStyle(.secondary)
+            // Once only: "On pace" up top already says "on pace".
+            if nudge?.lowercased() != window.verdict.lowercased() {
+                Text(window.verdict.sentenceCased)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
 
             // Kicker and burn rate are one supporting line, not two.
             Text(support).font(.system(size: 10)).foregroundStyle(.tertiary)

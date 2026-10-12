@@ -648,6 +648,18 @@ function paceLine(w) {
     : ["on pace", ""];
   const tone = gap > 15 ? "--critical" : gap > 5 ? "--warning"
     : gap < -5 ? "--good" : "--text-primary";
+  // The same verdict as an instruction. NUDGES in panel.py is the source;
+  // test_panel fails if this copy drifts from it.
+  const NUDGES = {
+    "well under pace": "Room to spare",
+    "a little under pace": "Keep going",
+    "on pace": "On pace",
+    "slightly ahead of pace": "Ease up",
+    "ahead of pace": "Slow down",
+  };
+  const nudge = NUDGES[verdict];
+  const nudgeHtml = nudge && nudge.toLowerCase() !== verdict
+    ? ` <span style="color:var(${tone})">· ${esc(nudge)}</span>` : "";
 
   const hit = at => `<strong style="color:var(--critical)">projected to hit 100% around ${
     esc(new Date(at).toLocaleString([], {weekday: "long", hour: "numeric", minute: "2-digit"}))}</strong>`;
@@ -686,7 +698,7 @@ function paceLine(w) {
       text-transform:uppercase;color:var(--text-muted)">${kicker}</div>
     <div style="font-family:var(--body);font-weight:600;font-size:20px;line-height:1.35;
       letter-spacing:-.005em;color:var(--text-primary);margin:7px 0 0;font-variant-numeric:tabular-nums">
-      ${w.used_pct}% used, <span style="color:var(${tone})">${verdict}</span></div>
+      ${w.used_pct}% used, <span style="color:var(${tone})">${verdict}</span>${nudgeHtml}</div>
     ${bits.length ? `<div style="font-size:13px;line-height:1.6;color:var(--text-secondary);margin-top:6px">
       ${bits.join(" · ")}</div>` : ""}
     ${adviceOf(w) ? `<div style="font-size:13px;line-height:1.5;font-weight:600;color:var(--text-primary);
