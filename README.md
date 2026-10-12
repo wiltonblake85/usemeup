@@ -297,6 +297,8 @@ neither does an amber one whose arithmetic already lands under 100.
 
 It appears on the page, in the menu bar panel, and in the notification body.
 
+Every window also gets a short call beside its figure, so a glance is enough. There's one for each step of the verdict: *Room to spare*, *Keep going*, *On pace*, *Ease up* and *Slow down*. A spent window says *Wait for reset*, or *Switch models* when it's a model-scoped window and the work has somewhere to go. A window nobody is using gets no call at all. The calls show in the menu bar drop-down and on the page.
+
 ## The status file
 
 `~/.usemeup/status.json` holds the whole picture for anything that would rather

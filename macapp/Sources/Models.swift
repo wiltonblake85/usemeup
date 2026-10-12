@@ -27,6 +27,9 @@ struct UsageWindow: Codable, Identifiable {
     /// What change lands this window at 100% by reset. Absent while it is green.
     let advice: String?
     let verdict: String
+    /// The verdict as a two- or three-word instruction ("Ease up"). Optional so
+    /// an older server without the field still decodes.
+    let nudge: String?
     let tone: String
     let state: String
     let kicker: String
@@ -83,7 +86,7 @@ struct UsageWindow: Codable, Identifiable {
     // Which windows sit in the bar is the user's choice now; see WindowPrefs.
 
     enum CodingKeys: String, CodingKey {
-        case key, label, headline, advice, verdict, tone, state, kicker, detail, basis
+        case key, label, headline, advice, verdict, nudge, tone, state, kicker, detail, basis
         case t0, t1, now, reference, observed, projection
         case yMax      = "y_max"
         case usedPct   = "used_pct"

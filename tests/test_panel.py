@@ -390,3 +390,50 @@ def test_the_chart_series_uses_the_axis_rule():
     over = panel.menubar({}, {"ok": True, "windows": [_window(60, 0.5, projected_end=120)]},
                          series=True)["windows"][0]
     assert over["y_max"] == 150.0
+
+
+# ------------------------------------------------------------------ nudges
+
+def test_nudge_turns_each_verdict_into_an_instruction():
+    assert panel.nudge_for("well under pace", "weekly_all") == "Room to spare"
+    assert panel.nudge_for("a little under pace", "weekly_all") == "Keep going"
+    assert panel.nudge_for("on pace", "weekly_all") == "On pace"
+    assert panel.nudge_for("slightly ahead of pace", "weekly_all") == "Ease up"
+    assert panel.nudge_for("ahead of pace", "weekly_all") == "Slow down"
+
+
+def test_every_pace_verdict_has_a_nudge():
+    for gap in (20, 10, 0, -10, -20):
+        verdict = panel.verdict_for(gap)[0]
+        assert panel.nudge_for(verdict, "weekly_all"), verdict
+
+
+def test_a_window_nobody_uses_gets_no_nudge():
+    assert panel.nudge_for("not in use", "weekly_all") is None
+
+
+def test_spent_nudge_depends_on_whether_there_is_a_way_out():
+    """A spent model-scoped window can move its work to another model. A spent
+    all-models or 5-hour window blocks everything, so it can only wait."""
+    assert panel.nudge_for("spent", "weekly_scoped") == "Switch models"
+    assert panel.nudge_for("spent", "weekly_all") == "Wait for reset"
+    assert panel.nudge_for("spent", "session") == "Wait for reset"
+
+
+def test_window_payload_and_menubar_carry_the_nudge():
+    built = panel.build_window(_window(100.0), None)
+    assert built["nudge"] == "Wait for reset"
+    assert panel.build_window(_window(84.0), None)["nudge"] == panel.nudge_for(
+        panel.build_window(_window(84.0), None)["verdict"], "weekly_all")
+    assert "nudge" in panel.MENUBAR_FIELDS
+
+
+def test_page_nudges_match_the_server():
+    """index.html computes its own verdict, so it carries its own copy of the
+    nudge table. This keeps the two copies saying the same thing."""
+    import pathlib
+    import re
+    html = (pathlib.Path(panel.__file__).parent / "index.html").read_text(encoding="utf-8")
+    block = re.search(r"const NUDGES = \{(.*?)\};", html, re.S)
+    assert block, "index.html lost its NUDGES table"
+    assert dict(re.findall(r'"([^"]+)":\s*"([^"]+)"', block.group(1))) == panel.NUDGES
