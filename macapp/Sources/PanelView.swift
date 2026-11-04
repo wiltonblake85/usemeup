@@ -2,12 +2,17 @@ import SwiftUI
 
 /// The drop-down under the menu bar item.
 ///
-/// Since 2026-09-25 this is the whole detailed view: every window's figures
-/// and its burn-up chart. The app no longer sends anyone to the web page for
-/// the chart; the page still exists for whoever runs the server by hand.
+/// The whole detailed view, and since 2026-11-04 the only one: every window's
+/// figures and its burn-up chart (here since 2026-09-25), and for each weekly
+/// window the week as seven daily bars above that chart. The bars were the
+/// last thing only the web page showed; with them here the page was removed,
+/// so one click shows everything and there is no second window to keep open.
 struct PanelView: View {
     @EnvironmentObject var store: UsageStore
     @ObservedObject private var prefs = WindowPrefs.shared
+    /// The windows' natural height, measured, so the drop-down can stop at
+    /// the bottom of the screen and scroll rather than run off it.
+    @State private var windowsHeight: CGFloat = 0
 
     /// Weekly windows first, the 5-hour window under them. The long windows are
     /// the ones you plan against; the short one is a footnote until it bites.
@@ -39,25 +44,7 @@ struct PanelView: View {
                     problem(firstRunHint(store.fetchError) ?? "Waiting for the first reading…")
                 }
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    if !store.isLive, store.payload?.signin?.signedOut != true {
-                        // Since 0.1.5 it also says why, so a grey bar is never a guess.
-                        Text("Not live: these figures are from \(store.payload?.staleLabel ?? "an earlier reading").\(store.payload?.staleWhy.map { " " + $0 } ?? "") UseMeUp keeps trying.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.bottom, 12)
-                    }
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(ordered.enumerated()), id: \.element.id) { i, w in
-                            if i > 0 { Divider().padding(.vertical, 14) }
-                            WindowRow(window: w)
-                        }
-                    }
-                    // Faded, not hidden: the last figures are still worth
-                    // seeing, as long as nobody mistakes them for current ones.
-                    .opacity(store.isLive ? 1 : 0.5)
-                }
-                .padding(16)
+                scrolling(windowsList)
             }
 
             Divider()
@@ -65,6 +52,50 @@ struct PanelView: View {
         }
         .frame(width: 540)
         .onAppear { Task { await store.refresh() } }
+    }
+
+    /// The tallest the windows may stand: the screen below the menu bar, less
+    /// the header, the footer and a margin. Three windows on, each with its
+    /// charts, run past the bottom of a 13-inch screen.
+    private var windowsMaxHeight: CGFloat {
+        let screen = NSScreen.main?.visibleFrame.height ?? 900
+        return max(320, screen - 190)
+    }
+
+    /// Natural height while it fits; past that, a fixed height that scrolls.
+    /// Until the first measurement arrives it takes the cap, never zero, so a
+    /// first open is never a sliver.
+    private func scrolling<V: View>(_ content: V) -> some View {
+        ScrollView(.vertical) {
+            content.background(GeometryReader { g in
+                Color.clear.preference(key: WindowsHeight.self, value: g.size.height)
+            })
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(windowsHeight > 0 ? windowsHeight : windowsMaxHeight, windowsMaxHeight))
+        .onPreferenceChange(WindowsHeight.self) { windowsHeight = $0 }
+    }
+
+    private var windowsList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !store.isLive, store.payload?.signin?.signedOut != true {
+                // Since 0.1.5 it also says why, so a grey bar is never a guess.
+                Text("Not live: these figures are from \(store.payload?.staleLabel ?? "an earlier reading").\(store.payload?.staleWhy.map { " " + $0 } ?? "") UseMeUp keeps trying.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 12)
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(ordered.enumerated()), id: \.element.id) { i, w in
+                    if i > 0 { Divider().padding(.vertical, 14) }
+                    WindowRow(window: w)
+                }
+            }
+            // Faded, not hidden: the last figures are still worth
+            // seeing, as long as nobody mistakes them for current ones.
+            .opacity(store.isLive ? 1 : 0.5)
+        }
+        .padding(16)
     }
 
     private var linkFailed: Bool {
@@ -104,6 +135,11 @@ struct PanelView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if ordered.contains(where: { !($0.daily?.days ?? []).isEmpty }) {
+                DailyLegend(unsampled: ordered.contains { w in
+                    (w.daily?.days ?? []).contains { $0.estimatedPct > 0.005 }
+                })
+            }
             if !ordered.isEmpty { BurnLegend() }
             if let p = store.payload, let hours = p.hoursLabel, let days = p.sampleDays {
                 // The pace model is only as good as the rhythm behind it, so the
@@ -169,8 +205,29 @@ private struct WindowRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // The week by day, then the same week as a line: one column per
+            // day in both, so a bar and its stretch of line sit together.
+            if let d = window.daily, !(d.days ?? []).isEmpty {
+                DailyChart(window: window, daily: d)
+                    .padding(.top, 6)
+                if let t = d.today, !t.isEmpty {
+                    Text(t.sentenceCased)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let n = d.note, !n.isEmpty {
+                    Text(n.sentenceCased)
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else if let e = window.daily?.error {
+                Text("The daily bars could not be drawn: \(e)")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             BurnChart(window: window)
-                .padding(.top, 4)
+                .padding(.top, window.daily?.days?.isEmpty == false ? 10 : 4)
 
             // Once only: "On pace" up top already says "on pace".
             if nudge?.lowercased() != window.verdict.lowercased() {
@@ -191,4 +248,10 @@ private struct WindowRow: View {
             }
         }
     }
+}
+
+/// The windows' natural height, reported up from inside the ScrollView.
+private struct WindowsHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }

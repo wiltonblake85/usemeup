@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agent.py - keep the dashboard running as a macOS launchd LaunchAgent.
+agent.py - keep the server running as a macOS launchd LaunchAgent.
 
     usemeup agent install     write the plist and start it; restarts at login and on crash
     usemeup agent uninstall   stop it and remove the plist
@@ -129,7 +129,7 @@ def install(auto_refresh=True, port=None):
               % plist["EnvironmentVariables"]["PYTHONPATH"])
     print("  refresh: %s" % ("ON" if auto_refresh else "off"))
     print("  logs   : %s" % LOG)
-    print("  url    : http://127.0.0.1:%d/" % p)
+    print("  serves : 127.0.0.1:%d, for the menu bar app" % p)
     print("It starts at login and restarts if it exits. `usemeup agent status` to check, "
           "`usemeup agent uninstall` to remove.")
     print("If macOS asks whether Python may use the Claude Code credential, allow it; "

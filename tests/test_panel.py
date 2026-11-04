@@ -428,12 +428,119 @@ def test_window_payload_and_menubar_carry_the_nudge():
     assert "nudge" in panel.MENUBAR_FIELDS
 
 
-def test_page_nudges_match_the_server():
-    """index.html computes its own verdict, so it carries its own copy of the
-    nudge table. This keeps the two copies saying the same thing."""
-    import pathlib
-    import re
-    html = (pathlib.Path(panel.__file__).parent / "index.html").read_text(encoding="utf-8")
-    block = re.search(r"const NUDGES = \{(.*?)\};", html, re.S)
-    assert block, "index.html lost its NUDGES table"
-    assert dict(re.findall(r'"([^"]+)":\s*"([^"]+)"', block.group(1))) == panel.NUDGES
+# ---------------------------------------------------------------- daily bars
+#
+# Since 2026-11-04 the drop-down draws the week as seven bars above the burn-up
+# chart; the web page that used to be the only place to see them is gone.
+
+def _week(readings, now, used):
+    """daily.build over a week that opened three days before `now`.
+
+    readings: [(seconds after the week opened, pct)]."""
+    from usemeup import daily
+    start = now - _dt.timedelta(days=3)
+    reset = start + _dt.timedelta(days=7)
+    window = {"key": "weekly_all", "used_pct": used, "window_seconds": 7 * 86400,
+              "resets_at": reset.isoformat()}
+    samples = [{"ts": (start + _dt.timedelta(seconds=s)).isoformat(), "used_pct": p,
+                "resets_at": reset.isoformat()} for s, p in readings]
+    return start, daily.build(window, samples, now)
+
+
+def _steady(day_totals, until_s, step=600):
+    """Readings every `step` seconds, each day rising evenly to its total."""
+    out, base = [], 0.0
+    for d, total in enumerate(day_totals):
+        for k in range(1, 86400 // step + 1):
+            s = d * 86400 + k * step
+            if s > until_s:
+                return out
+            out.append((s, round(base + (total - base) * k * step / 86400.0, 4)))
+        base = total
+    return out
+
+
+def test_daily_view_is_the_current_week_on_the_burn_charts_clock():
+    now = _dt.datetime(2026, 11, 7, 12, 0, tzinfo=_dt.timezone.utc)
+    start, d = _week(_steady([20.0, 25.0, 30.0], 3 * 86400 - 600), now, 30.0)
+    v = panel.daily_view(d)
+    days = v["days"]
+    assert len(days) == 7
+    # Epoch seconds, the clock BurnChart's t0/t1 use, so the bars share its columns.
+    assert days[0]["t0"] == start.timestamp()
+    assert days[6]["t1"] == start.timestamp() + 7 * 86400
+    assert [x["status"] for x in days] == ["past"] * 3 + ["today"] + ["future"] * 3
+    assert abs(days[0]["used_pct"] - 20.0) < 0.01
+    assert days[0]["estimated_pct"] == 0.0          # sampled every 10 minutes: measured
+    # What today may spend is a today-only figure.
+    assert "available_pct" in days[3]
+    assert all("available_pct" not in x for i, x in enumerate(days) if i != 3)
+    assert abs(v["share_pct"] - 100 / 7.0) < 0.01
+
+
+def test_the_note_names_the_reset_hour_and_past_weeks():
+    now = _dt.datetime(2026, 11, 7, 12, 0, tzinfo=_dt.timezone.utc)
+    _, d = _week(_steady([10.0], 86400), now, 10.0)
+    d["weeks"].append({"current": False, "total_pct": 52.4, "days": []})
+    d["weeks"].append({"current": False, "total_pct": 76.0, "days": []})
+    note = panel.daily_view(d)["note"]
+    hour = panel._clock(panel._parse(d["weeks"][0]["resets_at"]))
+    assert note.startswith("days run %s to %s, the time the week resets" % (hour, hour))
+    assert note.endswith("Past weeks, newest first: 52%, 76%.")
+
+
+def test_usage_in_a_sampling_gap_is_named_in_the_note():
+    now = _dt.datetime(2026, 11, 7, 12, 0, tzinfo=_dt.timezone.utc)
+    # Nothing sampled between hour 2 and hour 30, and 12 points accrued in it.
+    readings = [(k * 600, k / 6.0) for k in range(1, 13)]                # 2.0 by hour 2
+    readings += [(30 * 3600 + k * 600, 14.0 + k / 6.0) for k in range(0, 7)]  # 15.0 by 31
+    _, d = _week(readings, now, 15.0)
+    v = panel.daily_view(d)
+    assert "12.0% of this week came while nothing was sampling" in v["note"]
+    assert v["days"][0]["estimated_pct"] > 0 and v["days"][1]["estimated_pct"] > 0
+
+
+def test_today_line_states_the_share_and_what_is_left():
+    share = 100 / 7.0
+    plain = {"consumed_pct": 11.0, "available_pct": share, "remaining_pct": share - 11.0}
+    assert panel._today_line(share, plain, 0.0) == "today: 11.0% of a 14.3% share, 3.3% left"
+    banked = {"consumed_pct": 5.0, "available_pct": share + 3.57,
+              "remaining_pct": share + 3.57 - 5.0}
+    assert panel._today_line(share, banked, 3.57) == (
+        "today: 5.0% of 17.9% (a 14.3% share plus 3.6% unspent on earlier days), 12.9% left")
+    behind = {"consumed_pct": 12.0, "available_pct": share - 5.0,
+              "remaining_pct": share - 5.0 - 12.0}
+    assert panel._today_line(share, behind, -5.0) == (
+        "today: 12.0% of 9.3% (a 14.3% share less 5.0% overspent on earlier days), 2.7% over")
+    broke = {"consumed_pct": 3.0, "available_pct": share - 16.0,
+             "remaining_pct": share - 16.0 - 3.0}
+    assert panel._today_line(share, broke, -16.0) == (
+        "today: 3.0% used, with nothing left for it, since earlier days went 16.0% "
+        "over their shares")
+    assert panel._today_line(share, None, 0.0) is None
+
+
+def test_reset_hour_rounds_to_the_minute():
+    t = _dt.datetime(2026, 11, 10, 19, 59, 59, 600000).timestamp()     # local clock
+    assert panel._clock(t) == "8 PM"
+    assert panel._clock(_dt.datetime(2026, 11, 10, 19, 30).timestamp()) == "7:30 PM"
+    assert panel._clock(_dt.datetime(2026, 11, 10, 0, 0).timestamp()) == "12 AM"
+
+
+def test_daily_view_passes_errors_through_and_ignores_no_data():
+    assert panel.daily_view({"error": "ValueError: x"}) == {"error": "ValueError: x"}
+    assert panel.daily_view(None) is None
+    assert panel.daily_view({"allotment_pct": 14.29, "weeks": []}) is None
+
+
+def test_menubar_gives_weekly_windows_their_bars_only_with_series():
+    from usemeup import daily
+    w = _window(60, 0.5, projected_end=120)
+    w["daily"] = daily.build(w, [])
+    session = dict(_window(30, 0.5, window_seconds=5 * 3600), key="session")
+    limits = {"ok": True, "windows": [w, session]}
+    full = {x["key"]: x for x in panel.menubar({}, limits, series=True)["windows"]}
+    lean = {x["key"]: x for x in panel.menubar({}, limits)["windows"]}
+    assert len(full["weekly_all"]["daily"]["days"]) == 7
+    assert "daily" not in full["session"]          # a 5-hour window has no days
+    assert "daily" not in lean["weekly_all"]        # the minute poll stays small

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-verify.py - prove the dashboard's numbers by recounting from raw transcripts.
+verify.py - prove the transcript index's numbers by recounting from raw transcripts.
 
     python3 verify.py            # check every day
     python3 verify.py --days 30  # only the most recent 30 days

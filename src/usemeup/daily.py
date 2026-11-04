@@ -19,8 +19,8 @@ read the way people actually plan it:
 
 How a rise is attributed. Two samples taken close together (within
 MEASURED_MAX_S) put their rise squarely in one moment, so that share is
-"measured". A rise across a longer gap (the page was closed, the server was
-down) is real usage but its timing is not known. It is spread evenly across the
+"measured". A rise across a longer gap (the server was not running, or a probe
+failed) is real usage but its timing is not known. It is spread evenly across the
 gap, reported separately as "estimated", and the gap itself is returned so the
 chart can bracket those days and say how much accrued with unknown timing.
 

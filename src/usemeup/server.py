@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-server.py - serves the dashboard on localhost only.
+server.py - serves the menu bar app's figures on localhost only.
 
 Binds 127.0.0.1, so nothing outside this machine can reach it.
 
-  GET /             index.html
+There is no web page. Until 2026-11-04 GET / served a dashboard, index.html;
+the menu bar drop-down now draws everything it showed (the seven daily bars
+and the burn-up charts), so the page was removed rather than kept in step.
+GET / says so in one line.
+
+  GET /api/menubar  what the menu bar and its drop-down show; ?series=1 adds
+                    the chart series and the daily bars
   GET /api/usage    aggregates from the local index (no network)
-  GET /api/rhythm   only the working-day rhythm the pace model reads (by_hour)
   GET /api/limits   live rate-limit state (reads Keychain, calls api.anthropic.com;
                     or, with USEMEUP_SOURCE=statusline, reads a local file only)
   GET /api/panel    the two weekly burn-up charts, pace already applied
@@ -31,9 +36,10 @@ It also keeps ~/.usemeup/status.json current (see status.py) for readers that
 would rather open a file than call this server.
 
 While the server runs it also samples the rate-limit windows itself, once every
-SAMPLE_EVERY seconds, so the daily view is not blind whenever the page is closed.
-It goes through the same cache, TTL and 429 back-off as the page, so the total
-call rate to api.anthropic.com is unchanged: at most one probe per five minutes.
+SAMPLE_EVERY seconds, so the daily bars have a reading every five minutes
+whether or not anything is asking. It goes through the same cache, TTL and 429
+back-off as every request, so the call rate to api.anthropic.com is at most one
+probe per five minutes.
 The transcript folders are scanned only when something is about to be rebuilt
 from them: the working-day rhythm every 15 minutes, the full aggregates for
 /api/usage at most as often. A scan walks about 10,000 folders, so doing it on
@@ -41,7 +47,6 @@ every tick or request, as earlier versions did, cost CPU for an index nobody
 read in between.
 """
 import errno
-import hashlib
 import http.server
 import json
 import os
@@ -50,9 +55,6 @@ import sys
 import threading
 import time
 import urllib.request
-import webbrowser
-
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 from . import burn
 from . import config
@@ -70,10 +72,9 @@ _cache = {"usage": None, "usage_at": 0, "limits": None, "limits_at": 0, "ingest"
 _lock = threading.Lock()
 
 # /api/usage rebuilds every transcript aggregate (about 3.5 s of CPU on
-# 105,000 calls). Nothing in the app or the page reads it any more; it serves
-# /api/export and a page tab still running JavaScript from before 2026-09-25,
-# which polls it every minute. That tab cost a 3.6 s burst a minute on
-# 2026-09-26. A quarter hour is fresh enough for an export.
+# 105,000 calls). Nothing in the app reads it; it serves /api/export. On
+# 2026-09-26 a page tab left open from before 2026-09-25 polled it every
+# minute, a 3.6 s burst each time, which is why it is cached a quarter hour.
 TTL_USAGE, TTL_INGEST = 900, 120
 # The working-day rhythm is months of history; a quarter hour is plenty fresh.
 TTL_RHYTHM = 900
@@ -284,7 +285,7 @@ def _limits_unlocked():
     return d
 
 
-SAMPLE_EVERY = TTL_LIMITS    # one probe per cache lifetime; never more than the page alone
+SAMPLE_EVERY = TTL_LIMITS    # one probe per cache lifetime
 
 WINDOWS_FILE = os.path.join(config.DB_DIR, "windows.json")
 
@@ -293,8 +294,7 @@ def hidden_windows(path=None):
     """Window keys the user turned off in the menu bar app.
 
     The app publishes its per-window choice to ~/.usemeup/windows.json (see
-    WindowPrefs.swift); Transom already honours it, and the page now does too,
-    so a retired model's window (Fable, once Opus 5.5 replaced it) is gone
+    WindowPrefs.swift); Transom honours it as well, so a retired model's window (Fable, once Opus 5.5 replaced it) is gone
     everywhere at once. Only "off" hides. No file, a bad file or a missing key
     hides nothing: the server keeps measuring every window regardless.
     """
@@ -307,7 +307,7 @@ def hidden_windows(path=None):
 
 
 def _write_status():
-    """Rewrite ~/.usemeup/status.json from the caches the page already uses.
+    """Rewrite ~/.usemeup/status.json from the caches the server already keeps.
 
     Best-effort: a status file that cannot be written must never stop the
     sampler, and the error is kept where /api/limits can show it.
@@ -320,7 +320,7 @@ def _write_status():
 
 
 def _sampler():
-    """Keep the rate-limit sample history filling while the page is closed.
+    """Keep the rate-limit sample history filling, whoever is asking or not.
 
     _limits() owns every rule about when a probe is allowed (cache TTL, error
     TTL, 429 back-off), so this loop just asks on a timer and lets it decide.
@@ -403,12 +403,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if path == "/api/ping":
                 return self._send(200, json.dumps(ping()), "application/json")
             if path in ("/", "/index.html"):
-                with open(os.path.join(HERE, "index.html"), "rb") as f:
-                    return self._send(200, f.read(), "text/html; charset=utf-8")
+                # A bookmark, or a tab left open from before the page went
+                # (it reloads itself when `page` on /api/ping changes).
+                return self._send(404, NO_PAGE, "text/plain; charset=utf-8")
             if path == "/api/usage":
                 return self._send(200, json.dumps(_usage(), default=str), "application/json")
-            if path == "/api/rhythm":
-                return self._send(200, json.dumps(_rhythm(), default=str), "application/json")
             if path == "/api/limits":
                 # A shallow copy: the hidden list is per request, never cached.
                 d = dict(_limits() or {})
@@ -454,24 +453,21 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def _page_hash():
-    try:
-        with open(os.path.join(HERE, "index.html"), "rb") as f:
-            return hashlib.sha1(f.read()).hexdigest()[:12]
-    except OSError:
-        return None
+NO_PAGE = ("UseMeUp no longer has a web page. Its charts, the seven daily bars and the "
+           "burn-up chart for each window, are in the drop-down under UseMeUp in the "
+           "menu bar.\n")
 
-
-# Fixed at start: the page a server serves only changes when the server does.
-PAGE_HASH = _page_hash()
+# What /api/ping reports as `page`. The removed page compared it to the hash it
+# saw first and reloaded itself when it changed, so a tab left open across the
+# upgrade reloads once and lands on NO_PAGE instead of running on.
+PAGE_HASH = "none"
 
 
 def ping():
     """Who this server is. Cheap on purpose: no cache, no disk, no network.
 
-    `page` lets an open dashboard tab notice that the server now serves a
-    different page and reload itself, so a tab left open across an upgrade
-    stops running old code against new endpoints.
+    `page` is always "none" now: it is what tells a dashboard tab left open
+    from before 2026-11-04 to reload, and find the page gone.
     """
     from . import __version__
     return {"app": config.APP, "version": __version__, "pid": os.getpid(),
@@ -533,7 +529,7 @@ def bind(port, retry_every=None, log=None, stop=None):
             time.sleep(retry_every)
 
 
-def run(port=None, open_browser=True):
+def run(port=None):
     """Claim the port, then scan, then sample, then serve. See the module doc."""
     port = port or PORT
     httpd = bind(port)
@@ -553,8 +549,6 @@ def run(port=None, open_browser=True):
         print("  ingest problem: %s" % (info or {}).get("error"), flush=True)
     print(config.banner(), flush=True)
     start_sampler()
-    if open_browser:
-        threading.Timer(1.0, lambda: webbrowser.open("http://127.0.0.1:%d/" % port)).start()
     try:
         while web.is_alive():
             web.join(1.0)          # a timed join, so ctrl-c still lands here
@@ -567,4 +561,4 @@ def run(port=None, open_browser=True):
 
 
 if __name__ == "__main__":
-    sys.exit(run(PORT, open_browser=True))
+    sys.exit(run(PORT))

@@ -2,7 +2,7 @@
 """
 cli.py - the usemeup command.
 
-    usemeup                 index transcripts and serve the dashboard
+    usemeup                 run the server the menu bar app reads (no web page)
     usemeup serve           the same, with flags
     usemeup verify          recount from raw transcripts and check the index
     usemeup ingest          re-scan transcripts without starting the server
@@ -37,7 +37,7 @@ def cmd_serve(args):
     server.PORT = config.PORT
     # One startup path for the CLI, the LaunchAgent and the bundled server:
     # claim the port, and only then scan and sample. See server.run.
-    return server.run(config.PORT, open_browser=not args.no_open)
+    return server.run(config.PORT)
 
 
 def cmd_verify(args):
@@ -126,14 +126,18 @@ def cmd_statusline(args):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="usemeup",
-        description="A local Claude usage dashboard that can prove its own numbers.")
+        description="Claude rate-limit pace for the macOS menu bar, measured against "
+                    "your working hours.")
     sub = ap.add_subparsers(dest="cmd")
 
-    s = sub.add_parser("serve", help="index transcripts and serve the dashboard")
+    s = sub.add_parser("serve", help="run the server the menu bar app reads")
     s.add_argument("--port", type=int, help="default 8787, or USEMEUP_PORT")
     s.add_argument("--demo", action="store_true",
                    help="redact project and session names, for screenshots")
-    s.add_argument("--no-open", action="store_true", help="do not open a browser")
+    # There is no page to open any more. Still accepted, because every
+    # LaunchAgent written before 2026-11-04, and the app's bundled server,
+    # start the server with it.
+    s.add_argument("--no-open", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(fn=cmd_serve)
 
     v = sub.add_parser("verify", help="recount from raw transcripts and check the index")
@@ -152,7 +156,7 @@ def main(argv=None):
     pr.add_argument("--refresh", action="store_true", help="force a re-fetch")
     pr.set_defaults(fn=cmd_prices)
 
-    ag = sub.add_parser("agent", help="run the dashboard as a macOS LaunchAgent (24/7)")
+    ag = sub.add_parser("agent", help="run the server as a macOS LaunchAgent (24/7)")
     ag.add_argument("action", choices=["install", "uninstall", "status"])
     ag.add_argument("--port", type=int, help="serve on this port (default 8787)")
     ag.add_argument("--no-auto-refresh", action="store_true",

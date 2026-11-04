@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 
 from usemeup import config
@@ -120,7 +121,7 @@ class RunOrder(unittest.TestCase):
         server.start_sampler = lambda: calls.append("sampler")
         server.BIND_RETRY = 0.05
         try:
-            t = threading.Thread(target=server.run, args=(port, False), daemon=True)
+            t = threading.Thread(target=server.run, args=(port,), daemon=True)
             t.start()
             time.sleep(0.4)
             self.assertEqual(calls, [], "scanned or sampled without the port")
@@ -173,9 +174,28 @@ class Ping(unittest.TestCase):
             self.assertIn(d["source"], config.SOURCES)
             self.assertIsInstance(d["pid"], int)
             self.assertIsInstance(d["auto_refresh"], bool)
-            # The page hash an open tab compares to notice an upgrade.
-            self.assertEqual(d["page"], server.PAGE_HASH)
-            self.assertTrue(d["page"])
+            # A dashboard tab left open from before the page was removed
+            # reloads when this changes, and finds the page gone.
+            self.assertEqual(d["page"], "none")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+class NoPage(unittest.TestCase):
+    def test_the_root_says_the_page_is_gone_and_where_the_charts_are(self):
+        port = free_port()
+        httpd = server.bind(port, retry_every=0.05, log=lambda m: None)
+        serve_in_thread(httpd)
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            for path in ("/", "/index.html"):
+                with self.assertRaises(urllib.error.HTTPError) as cm:
+                    opener.open("http://127.0.0.1:%d%s" % (port, path), timeout=2)
+                self.assertEqual(cm.exception.code, 404)
+                body = cm.exception.read().decode("utf-8")
+                self.assertIn("no longer has a web page", body)
+                self.assertIn("menu bar", body)
         finally:
             httpd.shutdown()
             httpd.server_close()

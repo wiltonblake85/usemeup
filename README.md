@@ -1,30 +1,30 @@
 # UseMeUp
 
 Will your Claude subscription last until the reset? UseMeUp answers that for each
-rate-limit window, on a local page and in the macOS menu bar, and it measures
-your pace against the hours you actually work instead of a 24-hour clock.
+rate-limit window in the macOS menu bar, and it measures your pace against the
+hours you actually work instead of a 24-hour clock. One click on the menu bar
+item shows the week as seven daily bars with the forecast chart under them, in
+the same drop-down. There is no web page to keep open.
 
 Everything runs on your machine. By default it reads the limits Claude Code
 already hands its status line: no credential, no network call. An opt-in mode
 asks `api.anthropic.com` directly, which costs a Keychain read and buys the
 per-model weekly window.
 
-```
-uvx --from git+https://github.com/wiltonblake85/usemeup usemeup
-```
-
-or, installed:
+Most people want the Mac app, below. The same server also runs from Python, for
+anyone who would rather keep it under a LaunchAgent, read `~/.usemeup/status.json`
+from another tool, or use the command line:
 
 ```
 pipx install git+https://github.com/wiltonblake85/usemeup
-usemeup
+usemeup agent install
 ```
 
 Python 3.9 or later and **no dependencies**. Standard library only, so the whole
 supply chain is this repo.
 
 ```
-usemeup              serve the page on http://127.0.0.1:8787
+usemeup              run the server the menu bar app reads, on 127.0.0.1:8787
 usemeup agent        install | status | uninstall a LaunchAgent that keeps it running
 usemeup statusline   a Claude Code status line command that records your limits
 usemeup ingest       re-scan local transcripts without serving
@@ -75,16 +75,23 @@ one weekly forecast from "hits 100% Sunday 7:38 PM" to "does not hit 100%". The
 first is an alarm you learn to ignore. The second is something you can plan a
 week around.
 
-## What the page shows
+## What the drop-down shows
 
-One card, **Rate limit windows**, with a block for each window the API reports:
-the 5-hour session window, the 7-day window across all models, and any 7-day
-window scoped to one model. A window turned off in the menu bar app's Settings
-is left off the page too; the server keeps measuring it.
+Click UseMeUp in the menu bar. The drop-down has a block for each window the API
+reports and you haven't turned off in Settings: the 7-day window across all
+models, any 7-day window scoped to one model, and the 5-hour session window. The
+server keeps measuring a window you turn off.
 
 Each block leads with where the window ends up, in words: *landing near 92% at
-reset*, or *runs out around Tuesday 9:25 AM*. Under that sit the pace verdict
-with its burn rate, then the reset countdown.
+reset*, or *runs out around Tuesday 9:25 AM*. A weekly window then shows the week
+as seven daily bars and, under them, its burn-up chart. Both charts use the same
+seven day columns, so Wednesday's bar sits right above Wednesday on the line.
+The pace verdict, the burn rate and the reset countdown come last.
+
+Until 0.1.8 the daily bars lived on a web page the server served at
+`127.0.0.1:8787`, and reading a week meant the drop-down for the forecast plus a
+browser tab for the days. I moved the bars into the drop-down and removed the
+page. A tab left open from before reloads once and says so.
 
 ### The week as seven daily buckets
 
@@ -93,29 +100,29 @@ and most people plan in days, so each 7-day window is also drawn as seven bars.
 A seventh of the week (14.3%) is the day's share. A bar shows what that day
 consumed, and anything above the share line is drawn in red with the amount on
 it. Unspent share banks forward, so a quiet Sunday lets Monday spend more, and a
-heavy Tuesday draws the bank down. Today's bar carries a dashed cap at what it
-may still spend, and the caption says it outright: *11.5% of a 14.3% share,
-+46.9% banked from earlier days, 49.7% left today*.
+heavy Tuesday draws the bank down. Today's bar carries a short dashed line at
+what it may spend, and the sentence under the bars says it outright: *Today:
+3.0% of 22.1% (a 14.3% share plus 7.9% unspent on earlier days), 19.1% left*.
 
-Days are cut at the hour the week resets, not at midnight, which is why the seven
-bars sum exactly to the weekly figure. Up to four earlier weeks are summarised
-under the chart as history builds.
+Each day starts and ends at the time the week resets, not at midnight, which is
+why the seven bars sum exactly to the weekly figure. As history builds, the note
+under the bars lists up to four earlier weeks.
 
 ### A burn-up chart per window
 
-A solid line for what you've consumed, a dashed
-line for where the forecast lands by reset, and a grey reference for even pace.
-The point where the forecast meets 100% is marked with its day and time.
+The used line takes the window's colour, with a dot where you stand now.
+A grey dashed line shows where the current pace lands by reset, and it turns red
+if that landing is over 100%. A dotted grey line is your working-day pace, and a
+red dotted rule marks the cap. The forecast stays grey because it's a guess:
+drawn green, it read as last week's usage on the first evening of a week.
 
 ## How the forecast works
 
-A two-button control on the card switches the basis between **24h pace** and
-**work day**, with an hours-per-day selector that defaults to 10. On the
-work-day basis the grey reference becomes a staircase that goes flat outside
-working hours, the dashed forecast bends with it, and the verdict underneath is
-recomputed to match, with the burn rate quoted per working hour. Windows shorter
-than 36 hours stay on the wall clock, because a 5-hour window would otherwise use
-up its "working day" before it closes.
+UseMeUp paces weekly windows on a 10-hour working day. The grey reference is a
+staircase that goes flat outside working hours, the dashed forecast bends with
+it, and the verdict uses the same basis, with the burn rate quoted per working
+hour. Windows shorter than 36 hours stay on the wall clock, because
+a 5-hour window would otherwise use up its "working day" before it closes.
 
 ### Your hours come from your own history, from two instruments
 
@@ -125,8 +132,8 @@ between two readings is consumption that happened in that interval, and because
 the figure is account-wide it sees cloud sessions and claude.ai. The weekday
 split comes from the local transcript index until enough weeks of samples pile up
 to carry it, since one week of samples says things like "Sunday is 2% of the
-week", which is noise. The page footnote always names which source drove the
-hours. On my account the two instruments share no wiring and still land on the
+week", which is noise. The drop-down's footer names the working day it found and
+how many days of history it learned it from. On my account the two instruments share no wiring and still land on the
 same working day, 7 AM to about 4 PM.
 
 ### Early in a window, the forecast leans on past windows
@@ -141,7 +148,7 @@ in between, from both in proportion. With no history and no span, the headline
 reads *not enough history to project yet*. A number with nothing behind it is
 the failure this replaced, so "no opinion" survives all the way to the screen,
 and the payload carries a `source` field (history, blend, observed or clock) that
-the page prints.
+the drop-down prints under each chart.
 
 Those historical figures are floors. A window that reaches 100 stops rising, so
 demand past the cap is invisible, and the code reports how many windows were
@@ -167,9 +174,10 @@ The buckets are derived, not reported, so two caveats apply. The API reports
 whole percent. A day under 1% of the week therefore reads as zero. And daily
 consumption is only the rise in the cumulative figure while something was there
 to sample it, which means the server has to be running for a day to be measured. A rise that happened while nothing was sampling is still real
-usage, but its timing is unknown, so it is spread evenly across the gap, drawn
-hatched, and bracketed with the amount: *24.5% over 5.4 days not sampled, timing
-unknown*. Evenly, and not by a cleverer proxy, on purpose. An earlier build
+usage, but its timing is unknown, so UseMeUp spreads it evenly across the gap,
+draws it lighter, and names the amount under the bars: *18.2% of this week came
+while nothing was sampling, so its timing is unknown*. Evenly, and not by a cleverer proxy, on
+purpose. An earlier build
 placed gap usage by local transcript volume. Cloud sessions leave no transcripts
 here, so the proxy was blind to the work it was meant to locate and drew four
 near-empty days that had been busy.
@@ -223,13 +231,13 @@ macOS asks for permission the first time there is something to say, not at
 launch. Settings has the switch, the current permission state, and a button
 that sends a test.
 
-Clicking the bar opens a drop-down with, per window: the headline, any advice,
-the burn-up chart (used so far, where the current pace lands by reset, your
-working-day pace, the cap and now), the verdict and the reset countdown. The
-chart is drawn from the same series the server computes for the notch, so the
-two cannot disagree. The app no longer links to the web page; the page is still
-served for anyone running `usemeup` by hand, and it hides any window turned off
-in the app's Settings (it reads `~/.usemeup/windows.json`, as Transom does).
+Clicking the bar opens the drop-down described above: per window, the headline,
+any advice, the daily bars for a weekly window, the burn-up chart, the verdict
+and the reset countdown. The charts draw the series the server computes for the
+notch, so the two cannot disagree. If several windows are on and
+the drop-down would run past the bottom of the screen, it scrolls. A window
+turned off in Settings is off in Transom too, which reads
+`~/.usemeup/windows.json`.
 
 ### Where the item sits in the bar
 
@@ -295,9 +303,9 @@ go to another model, and once it is spent it says so outright, with the catch:
 that work still counts against all models. A green window gets no advice, and
 neither does an amber one whose arithmetic already lands under 100.
 
-It appears on the page, in the menu bar panel, and in the notification body.
+It appears in the drop-down and in the notification body.
 
-Every window also gets a short call beside its figure, so a glance is enough. There's one for each step of the verdict: *Room to spare*, *Keep going*, *On pace*, *Ease up* and *Slow down*. A spent window says *Wait for reset*, or *Switch models* when it's a model-scoped window and the work has somewhere to go. A window nobody is using gets no call at all. The calls show in the menu bar drop-down and on the page.
+Every window also gets a short call beside its figure, so a glance is enough. There's one for each step of the verdict: *Room to spare*, *Keep going*, *On pace*, *Ease up* and *Slow down*. A spent window says *Wait for reset*, or *Switch models* when it's a model-scoped window and the work has somewhere to go. A window nobody is using gets no call at all. The calls show in the drop-down.
 
 ## The status file
 
@@ -340,8 +348,7 @@ inside the app:
   "command": "/Applications/UseMeUp.app/Contents/Resources/server/usemeup-server statusline" } }
 ```
 
-Until a reading arrives, the page says which of the two to use, since it knows
-how it was installed.
+Until a reading arrives, the drop-down says what to set up.
 
 ### `endpoint`, opt-in
 
@@ -399,8 +406,8 @@ the Keychain's, and denying it leaves the status line source as the way in.
 `pricing.py` does a plain GET of a public price list. Nothing about you is sent,
 and `USEMEUP_OFFLINE=1` turns it off.
 
-The server probes the endpoint at most once every five minutes, page open or
-closed, and backs off to as long as 30 minutes after an HTTP 429. Samples are kept
+The server probes the endpoint at most once every five minutes, whether or not
+anything is asking, and backs off to as long as 30 minutes after an HTTP 429. Samples are kept
 for 90 days in `~/.usemeup/usage.db`, a few megabytes at most.
 
 ## Keeping it running
@@ -440,11 +447,12 @@ handful of Haiku tokens about once a day. A tool that
 makes billable calls on your account shouldn't be something you find out about
 later, so the plain `usemeup` command leaves it off. The agent turns it on,
 because an unattended meter that goes stale twice a day defeats the point; pass
-`--no-auto-refresh` to keep it read-only. Without it, the page tells you the
-token expired and that `claude -p ok` fixes it. (`claude auth status` doesn't
-refresh it. It only reads local state.) When the sign-in has ended, the page
-says Claude Code is signed out and points to the app's Sign in button, or
-`claude auth login` in a terminal.
+`--no-auto-refresh` to keep it read-only. Without it, the drop-down says the
+access token ran out and the server is set not to renew it; any Claude Code call,
+such as `claude -p ok`, fixes it. (`claude auth status` doesn't refresh it. It
+only reads local state.) When the sign-in has ended, the drop-down says Claude
+Code is signed out and offers a Sign in button; `claude auth login` in a
+terminal does the same.
 
 ## Configuration
 
@@ -458,12 +466,12 @@ says Claude Code is signed out and points to the app's Sign in button, or
 | `USEMEUP_OFFLINE=1` | never fetch live prices |
 | `USEMEUP_DEMO=1` | replace project and session names with stable pseudonyms in `/api/usage` and the export |
 
-## The transcript index, and why it left the page
+## The transcript index, and why its charts are gone
 
 UseMeUp started as a cost dashboard. It indexed the Claude Code and Cowork
 transcripts on this Mac, priced every call at API list rates, and charted spend
-by day, model, project and session. Those charts are gone from the page, and the
-reason is worth writing down.
+by day, model, project and session. I removed those charts in September 2026,
+before the page itself went, and the reason is worth writing down.
 
 They were accurate about the wrong thing. Cloud sessions, Claude Code on the web
 and cloud scheduled tasks run on Anthropic's servers and write nothing to your

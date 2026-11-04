@@ -49,6 +49,10 @@ struct UsageWindow: Codable, Identifiable {
     let observed: [[Double]]?
     let projection: [[Double]]?
 
+    /// The week as seven bars (panel.daily_view), on weekly windows only, and
+    /// only with ?series=1. Absent from a server older than 0.1.8.
+    let daily: DailyView?
+
     var id: String { key }
 
     /// `state` is the whole answer; the server's chart_state already weighed
@@ -87,12 +91,58 @@ struct UsageWindow: Codable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case key, label, headline, advice, verdict, nudge, tone, state, kicker, detail, basis
-        case t0, t1, now, reference, observed, projection
+        case t0, t1, now, reference, observed, projection, daily
         case yMax      = "y_max"
         case usedPct   = "used_pct"
         case resetsAt  = "resets_at"
         case overCap   = "over_cap"
         case resetsIn  = "resets_in"
+    }
+}
+
+/// A weekly window as seven daily buckets. Days are cut at the hour the week
+/// resets, so the seven add up to the week's figure, and each day's share is a
+/// seventh of it. The server (daily.py, panel.daily_view) does every sum and
+/// writes the sentences; the app draws.
+struct DailyView: Codable {
+    let sharePct: Double?
+    let days: [DailyBar]?
+    /// "today: 11.0% of a 14.3% share, 3.3% left"
+    let today: String?
+    /// How the days are cut, any usage that arrived unsampled, past weeks.
+    let note: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case days, today, note, error
+        case sharePct = "share_pct"
+    }
+}
+
+struct DailyBar: Codable, Identifiable {
+    /// Epoch seconds, on the burn-up chart's clock.
+    let t0: Double
+    let t1: Double
+    /// past, today or future
+    let status: String
+    let usedPct: Double
+    /// The part seen rising between samples five minutes apart.
+    let measuredPct: Double
+    /// The part that arrived while nothing was sampling, spread evenly.
+    let estimatedPct: Double
+    /// Today only: the share plus whatever earlier days left unspent.
+    let availablePct: Double?
+
+    var id: Double { t0 }
+    var isToday: Bool { status == "today" }
+    var isFuture: Bool { status == "future" }
+
+    enum CodingKeys: String, CodingKey {
+        case t0, t1, status
+        case usedPct = "used_pct"
+        case measuredPct = "measured_pct"
+        case estimatedPct = "estimated_pct"
+        case availablePct = "available_pct"
     }
 }
 

@@ -1,17 +1,16 @@
-"""Panel payload: the two weekly burn-up charts, already re-based.
+"""Panel payload: the burn-up charts and daily bars, already re-based.
 
-The dashboard's pace model lived in index.html as JavaScript, which is fine
-while the dashboard is the only reader. It stopped being fine the moment a
-second surface (the Transom notch panel) wanted the same two charts: a model
-that exists twice drifts, and this one is still being tuned.
+The pace model began as JavaScript in a web page, index.html, which was fine
+while the page was the only reader. It stopped being fine the moment a second
+surface (the Transom notch panel) wanted the same charts: a model that exists
+twice drifts, and this one is still being tuned.
 
-So the model lives here now, in Python, and `/api/panel` serves it already
-computed. A client draws three polylines and prints two strings. Nothing about
-the pace basis, the weekday weighting or the projection is a client's business.
-
-This is a PORT of `dutyWeights` / `dutyCurve` / `paceBasis` / `paceLine` from
-index.html, kept deliberately line-for-line comparable so the two can be diffed
-by eye until the page is switched over to read from here too.
+So the model lives here, in Python, and `/api/panel` and `/api/menubar` serve
+it already computed. A client draws polylines and bars and prints strings.
+Nothing about the pace basis, the weekday weighting or the projection is a
+client's business. It started as a port of the page's `dutyWeights` /
+`dutyCurve` / `paceBasis` / `paceLine`; the page itself was removed on
+2026-11-04, once the menu bar drop-down drew everything it showed.
 """
 
 from __future__ import annotations
@@ -20,8 +19,8 @@ import datetime as _dt
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-# The working day, in hours. The dashboard lets this be picked in the UI; the
-# panel has no UI, so it takes the value Wekesa settled on.
+# The working day, in hours: the value Wekesa settled on. (The removed web page
+# let it be picked; nothing else ever has.)
 HOURS_PER_DAY = 10
 
 DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -424,9 +423,8 @@ def verdict_for(gap: float) -> Tuple[str, str, str]:
 
 # The verdict in two or three words, as an instruction rather than a
 # description: what to do about the slope. Keyed on the verdict so the two can
-# never disagree. index.html carries the same table for the page, and
-# test_panel checks the copies match. "not in use" gets none: there is nothing
-# to do about a window nobody is using.
+# never disagree. "not in use" gets none: there is nothing to do about a
+# window nobody is using.
 NUDGES = {
     "well under pace": "Room to spare",
     "a little under pace": "Keep going",
@@ -679,6 +677,110 @@ def build(usage: Dict[str, Any], limits: Dict[str, Any],
     }
 
 
+# ---------------------------------------------------------------- daily bars
+
+def _pct1(v: float) -> str:
+    return "%.1f%%" % v
+
+
+def _clock(epoch: float) -> str:
+    """'7 PM', or '7:30 PM' when the minute matters. Local clock, rounded to
+    the minute, so a reset at 7:59:59.6 PM reads as 8 PM, not 7 PM."""
+    d = _dt.datetime.fromtimestamp(round(epoch / 60.0) * 60)
+    if d.minute:
+        return "%d:%02d %s" % (12 if d.hour % 12 == 0 else d.hour % 12, d.minute,
+                               "AM" if d.hour < 12 else "PM")
+    return _hr12(d.hour)
+
+
+def _today_line(share: float, today: Optional[Dict[str, Any]],
+                bank: Optional[float]) -> Optional[str]:
+    """What today has spent against what it may spend, as one fragment."""
+    if not today:
+        return None
+    used = float(today.get("consumed_pct") or 0.0)
+    avail = today.get("available_pct")
+    left = today.get("remaining_pct")
+    if avail is None or left is None:
+        return None
+    bank = bank or 0.0
+    if avail <= 0:
+        return ("today: %s used, with nothing left for it, since earlier days went %s "
+                "over their shares" % (_pct1(used), _pct1(-bank)))
+    if abs(bank) < 0.05:
+        allowance = "a %s share" % _pct1(share)
+    elif bank > 0:
+        allowance = "%s (a %s share plus %s unspent on earlier days)" % (
+            _pct1(avail), _pct1(share), _pct1(bank))
+    else:
+        allowance = "%s (a %s share less %s overspent on earlier days)" % (
+            _pct1(avail), _pct1(share), _pct1(-bank))
+    tail = ("%s left" % _pct1(left)) if left >= 0 else ("%s over" % _pct1(-left))
+    return "today: %s of %s, %s" % (_pct1(used), allowance, tail)
+
+
+def daily_view(d: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The current week as seven bars, for the drop-down to draw.
+
+    daily.build has done the arithmetic: days cut at the hour the week resets,
+    a seventh of the week as each day's share, unspent share carried forward,
+    and every rise split into measured and spread-evenly. This keeps only the
+    current week, puts its times in epoch seconds (the burn-up chart's t0/t1
+    clock, so the bars sit in the same day columns as that chart) and writes
+    the sentences, so the app only draws.
+
+    Fields: share_pct, days [{t0, t1, status, used_pct, measured_pct,
+    estimated_pct, available_pct (today only)}], today, note. None for a
+    window with no daily view; {"error": ...} when building one failed.
+    """
+    if not d:
+        return None
+    if d.get("error"):
+        return {"error": d["error"]}
+    weeks = d.get("weeks") or []
+    wk = next((x for x in weeks if x.get("current")), None)
+    if not wk:
+        return None
+    share = float(d.get("allotment_pct") or 0.0)
+    days = []
+    for b in wk.get("days") or []:
+        t0, t1 = _parse(b.get("start")), _parse(b.get("end"))
+        if t0 is None or t1 is None:
+            continue
+        bar = {"t0": round(t0, 3), "t1": round(t1, 3), "status": b.get("status"),
+               "used_pct": b.get("consumed_pct") or 0.0,
+               "measured_pct": b.get("measured_pct") or 0.0,
+               "estimated_pct": b.get("estimated_pct") or 0.0}
+        if b.get("status") == "today":
+            bar["available_pct"] = b.get("available_pct")
+        days.append(bar)
+    if not days:
+        return None
+
+    notes = []
+    reset = _parse(wk.get("resets_at"))
+    if reset is not None:
+        hour = _clock(reset)
+        notes.append("days run %s to %s, the time the week resets, so the seven bars "
+                     "add up to the week" % (hour, hour))
+    unsampled = sum(float(g.get("pct") or 0.0) for g in wk.get("gaps") or [])
+    if unsampled >= 0.05:
+        notes.append("%s of this week came while nothing was sampling, so its timing "
+                     "is unknown" % _pct1(unsampled))
+    past = [x for x in weeks if not x.get("current")]
+    if past:
+        notes.append("past weeks, newest first: %s" % ", ".join(
+            "%.0f%%" % float(x.get("total_pct") or 0.0) for x in past))
+    return {
+        "share_pct": round(share, 2),
+        "days": days,
+        "today": _today_line(share, wk.get("today"), wk.get("bank_before_today_pct")),
+        # A fragment like every server string: the client capitalises the start.
+        "note": (notes[0] + "".join(". " + n[0].upper() + n[1:] for n in notes[1:]) + "."
+                 if notes else None),
+    }
+
+
 # ---------------------------------------------------------------- menu bar
 
 # The menu bar shows the 5-hour window too. The panel leaves it out because two
@@ -694,7 +796,7 @@ MENUBAR_FIELDS = ("key", "label", "used_pct", "headline", "advice", "verdict", "
                   "over_cap")
 
 # The burn-up chart, for a client that draws it (the menu bar's drop-down
-# since 2026-09-25, which replaced sending people to the web page for it).
+# since 2026-09-25; the web page that drew it first was removed 2026-11-04).
 # Where a chart's landing figure stops fitting under a 0-100 axis. The label is
 # about 11 pt tall and centred on its point; on a plot about 125 pt high, the
 # upper half of it needs roughly 6% of the axis above the point. Below this a
@@ -973,9 +1075,13 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
     is actually in trouble.
 
     `series=True` keeps the plotted series (SERIES_FIELDS) as well, for a
-    drop-down that draws the burn-up charts itself.
+    drop-down that draws the burn-up charts itself, and gives each weekly
+    window its seven daily bars (daily_view). Since 2026-11-04 the drop-down
+    is the only place either chart is drawn; the web page that used to hold
+    the daily bars is gone.
     """
     full = build(usage, limits, keys=MENUBAR_KEYS, priors=priors)
+    by_key = {w.get("key"): w for w in ((limits or {}).get("windows") or [])}
     signin = signin_view(limits)
     s_alert = signin_alert(signin)
     # Present with or without figures: a signed-out Mac that has never had a
@@ -993,6 +1099,9 @@ def menubar(usage: Dict[str, Any], limits: Dict[str, Any],
         c = {k: w[k] for k in MENUBAR_FIELDS if k in w}
         if series:
             c.update({k: w[k] for k in SERIES_FIELDS if k in w})
+            dv = daily_view((by_key.get(w.get("key")) or {}).get("daily"))
+            if dv:
+                c["daily"] = dv
         c["resets_in"] = _resets_in(w.get("resets_at"))
         wins.append(c)
         a = alert_for(w)

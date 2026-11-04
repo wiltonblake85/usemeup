@@ -10,7 +10,7 @@ Environment variables:
   USEMEUP_PORT           port for the local server            (default 8787)
   USEMEUP_TZ             IANA zone for day bucketing          (default: your system zone)
   USEMEUP_DEMO=1         redact project and session names, for screenshots
-  USEMEUP_AUTO_REFRESH=1 let the dashboard run `claude -p ok` to refresh an
+  USEMEUP_AUTO_REFRESH=1 let the server run `claude -p ok` to refresh an
                          expired token. OFF by default because it spends a
                          small number of your tokens. See README.
   USEMEUP_OFFLINE=1      never fetch live prices; use the cache or bundled table
@@ -238,14 +238,15 @@ def redact(label, kind="project"):
 
 
 def banner():
-    lines = ["%s  ->  http://127.0.0.1:%d/" % (APP, PORT),
+    lines = ["%s server on 127.0.0.1:%d, for the menu bar app (there is no web page)"
+             % (APP, PORT),
              "bound to 127.0.0.1 only. ctrl-c to stop."]
     if DEMO:
         lines.append("DEMO MODE: project and session names are redacted. Numbers are real.")
     if not COWORK_ROOT:
         lines.append("note: no Cowork transcript folder found; showing Claude Code CLI only.")
-    lines.append("sampling rate limits every 5 min while running, so the daily view "
-                 "keeps filling with the page closed.")
+    lines.append("sampling rate limits every 5 min while running, so the daily bars "
+                 "keep filling.")
     lines.append("rate limits from: %s" % {
         "endpoint": "usage endpoint (reads the Claude Code token from the Keychain)",
         "statusline": "Claude Code status line (no credential, no network)",

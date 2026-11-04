@@ -3,10 +3,12 @@ import SwiftUI
 
 /// The burn-up chart for one window, drawn from the server's own series.
 ///
-/// This is the chart the web page used to be the only place to see. The page
-/// computed its lines in JavaScript; this draws the three series panel.py
-/// already computes (the same ones Transom's notch reads), so the app and the
-/// notch cannot disagree about where a window lands.
+/// This is the chart the web page used to be the only place to see (the page
+/// was removed 2026-11-04). The page computed its lines in JavaScript; this
+/// draws the three series panel.py already computes (the same ones Transom's
+/// notch reads), so the app and the notch cannot disagree about where a
+/// window lands. On a weekly window it sits under that window's DailyChart,
+/// on the same seven day columns.
 ///
 ///   filled line   what has been used, from the five-minute samples, in the
 ///                 window's colour, with a dot where it stands now
@@ -129,7 +131,13 @@ struct BurnChart: View {
             AxisMarks(position: .leading, values: Array(stride(from: 0.0, through: yTop, by: 25))) { v in
                 AxisGridLine().foregroundStyle(Color.secondary.opacity(0.18))
                 AxisValueLabel {
-                    if let d = v.as(Double.self) { Text("\(Int(d))%").font(.system(size: 9)) }
+                    // A fixed width, the same as DailyChart's, so the two plots
+                    // above each other start at the same x and their day
+                    // columns line up.
+                    if let d = v.as(Double.self) {
+                        Text("\(Int(d))%").font(.system(size: 9))
+                            .frame(width: BurnStyle.yLabelWidth, alignment: .trailing)
+                    }
                 }
             }
         }
@@ -141,10 +149,22 @@ struct BurnChart: View {
                         .font(.system(size: 9))
                 }
             } else {
-                AxisMarks(values: .stride(by: .day)) { _ in
+                // The week's own days, cut at the reset hour and labelled at
+                // their middles (WeekAxis), not calendar midnights: the same
+                // seven columns as the daily bars drawn above this chart.
+                // Before 2026-11-04 the grid sat on midnights, four or five
+                // hours off the bars' days.
+                let axis = WeekAxis(t0: start.timeIntervalSince1970, t1: end.timeIntervalSince1970)
+                AxisMarks(values: axis.bounds) { _ in
                     AxisGridLine().foregroundStyle(Color.secondary.opacity(0.12))
-                    AxisValueLabel(format: .dateTime.weekday(.abbreviated), centered: true)
-                        .font(.system(size: 9))
+                }
+                AxisMarks(values: axis.mids) { v in
+                    AxisValueLabel(centered: false, anchor: .topLeading) {
+                        if let d = v.as(Date.self) {
+                            WeekAxis.centred(Text(d.formatted(.dateTime.weekday(.abbreviated)))
+                                .font(.system(size: 9)))
+                        }
+                    }
                 }
             }
         }
@@ -170,6 +190,10 @@ enum BurnStyle {
 
     /// panel.HEADROOM_FROM: above this landing the axis grows past 100.
     static let headroomFrom = 94.0
+
+    /// Every chart's y-axis labels get this width, so stacked charts' plots
+    /// start at the same x.
+    static let yLabelWidth: CGFloat = 26
 }
 
 /// What the lines mean, once under all the charts rather than under each.
