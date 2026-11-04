@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "usemeup"
-version = "0.1.7"
+version = "0.1.8"
 description = "Claude rate-limit pace for the macOS menu bar: a forecast for each window measured against your working hours, the week as seven daily bars, and a verifier that recounts from raw transcripts."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -1,3 +1,3 @@
-"""UseMeUp: a local Claude usage dashboard that can prove its own numbers."""
+"""UseMeUp: Claude rate-limit pace for the macOS menu bar, measured against your working hours."""
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
